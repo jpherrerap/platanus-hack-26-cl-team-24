@@ -6,8 +6,7 @@ Preparación, antes de subir al escenario, desde la raíz del repositorio:
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install .
-rm -f isde.sqlite   # borra el historial de ensayos anteriores
-python -m isde demo > /dev/null 2>&1   # la primera ejecución compila problog y avisa un SyntaxWarning inofensivo
+python -m isde demo > /dev/null   # ensayo: debe terminar sin errores
 ```
 
 Ten la terminal con letra grande y este archivo abierto al lado.
@@ -16,7 +15,7 @@ Ten la terminal con letra grande y este archivo abierto al lado.
 
 - Los guardrails actuales revisan cada respuesta por separado: «¿este texto contiene un secreto?».
 - Pero los secretos se filtran por acumulación. Una respuesta inocente hoy, sumada a lo que la persona vio ayer, le permite deducir lo que no debía saber.
-- Ejemplo ficticio: en AlphaCorp, que la oferta a BetaAI ya está firmada es confidencial. Luis, de ventas, vio un acta que dice «el expediente O-17 está firmado», pero no sabe a quién corresponde O-17. Si el agente le responde «el expediente O-17 corresponde a BetaAI», Luis junta las piezas.
+- Ejemplo ficticio: en AlphaCorp, que la oferta a BetaAI ya está firmada es confidencial. Luis, de ventas, vio un acta que dice «el expediente O-17 está firmado», pero no sabe a quién corresponde O-17. Si el agente le responde «el expediente O-17 corresponde a BetaAI», Luis junta las piezas. Y al revés: Ana recibe hoy esa frase sin problema, pero mañana un «O-17 ya está firmado», inocuo por sí solo, completa la deducción.
 
 ## 2. Idea (30 s)
 
@@ -27,38 +26,33 @@ Ten la terminal con letra grande y este archivo abierto al lado.
 
 ## 3. Demo en vivo (75 s)
 
-### Paso 1: la misma pregunta para cuatro personas
-
 ```bash
 python -m isde demo
 ```
 
-Las cuatro piden la tarea «due» (¿cuándo vence el trámite?) y el agente propone el mismo borrador: «El trámite vence el viernes. El expediente O-17 corresponde a BetaAI.» Cada bloque tiene cuatro pasos: contexto, borrador, evaluación y bandeja. Señala:
+Cada bloque muestra cuatro pasos: contexto, borrador del agente, evaluación y bandeja de entrada.
 
-- **ana** (rol `vendor`, «no tiene pistas previas»): `PERMITIR`. Recibe el borrador completo, porque no tiene la otra pieza.
-- **luis** (rol `vendor`, «ya pudo saber (98%): o17 · signature = signed», porque citó el acta): `P(betaai · offer_status = signed) 0% → 74%`, `RETENIDO: sube al menos +45%`. La alternativa 2 no aumenta nada, así que la decisión es `REPARAR` y su bandeja recibe solo «El trámite vence el viernes.». La tarea sigue respondida.
-- **sofia** (rol `senior_legal`, que hereda de `legal`): «su rol puede recibir: offer_status», así que `PERMITIR`.
-- **ines** (rol `procurement`, solo pudo consultar el acta, 15%): sube `0% → 11%`, «bajo el umbral (75% o +45%)», así que `PERMITIR`. La traza lo deja registrado igual.
+### Turno 1: el mismo borrador para cuatro personas
 
-La última línea resume: `ana PERMITIR · luis REPARAR · sofia PERMITIR · ines PERMITIR`.
+Las cuatro piden la tarea «due» (¿cuándo vence el trámite?) y el agente propone: «El trámite vence el viernes. El expediente O-17 corresponde a BetaAI.» Señala:
 
-Frase para cerrar el paso: «Mismo texto, cuatro decisiones distintas. Depende de quién lo recibe y qué ya sabe».
+- **ana** (`vendor`, «no tiene pistas previas»): `PERMITIR`. No tiene la otra pieza.
+- **luis** (`vendor`, «ya pudo saber (98%): o17 · signature = signed», porque citó el acta): `P(betaai · offer_status = signed) 0% → 74%` y `RETENIDO: sube al menos +45%`. La alternativa 2 no aumenta nada, así que `REPARAR`: su bandeja recibe solo «El trámite vence el viernes.». La tarea sigue respondida.
+- **sofia** (`senior_legal`, hereda de `legal`): «su rol puede recibir: offer_status», así que `PERMITIR`.
+- **ines** (`procurement`, solo pudo consultar el acta, 15%): `0% → 11%`, «bajo el umbral (75% o +45%)», así que `PERMITIR`.
 
-Si prefieres una vista gráfica, `python -m isde serve` abre la misma demo en http://127.0.0.1:8000/?user=luis, con barras de probabilidad antes y después. Es una vista previa en memoria: no entrega nada.
+Frase: «Mismo texto, cuatro decisiones. Depende de quién lo recibe y qué ya sabe».
 
-### Paso 2: la bandeja y la revisión
+### Turno 2: lo entregado ayer cuenta hoy
 
-```bash
-python -m isde load examples/history.yaml
-python -m isde deliver luis due solicitud_001 > /dev/null
-python -m isde inbox luis
-python -m isde deliver luis signature solicitud_002 | head -3
-```
+Ahora Ana y Luis piden la tarea «record» y el agente propone «El expediente O-17 ya está firmado.». Señala:
 
-Señala:
+- **ana**: el contexto ahora incluye «ya pudo saber (75%): o17 · counterparty = betaai», que es lo que ISDE le entregó en el turno 1. Con eso, `0% → 56%`, `RETENIDO`, y como no hay otra alternativa: `REVISIÓN HUMANA · … no se entrega nada`. Su bandeja sigue con el mensaje del turno 1.
+- **luis**: ya sabía que O-17 está firmado y nunca recibió la contraparte, así que `PERMITIR`.
 
-- `inbox luis` muestra lo único que Luis ve: `"El trámite vence el viernes."`. La traza con probabilidades es privada del operador.
-- Si Luis pregunta directamente por la firma, la única respuesta del catálogo la revela: `"action": "review"` y `"text": null`. Nada llega a su bandeja.
+Frase: «Un guardrail que mira una respuesta a la vez habría dejado pasar las dos».
+
+La línea `Resumen` al final repite las seis decisiones. Si hay tiempo o piden verlo gráfico: `python -m isde serve` y abrir http://127.0.0.1:8000/?user=luis. Es una vista previa en memoria del turno 1: no entrega nada, así que no acumula historial entre consultas.
 
 ## 4. Límites honestos (30 s)
 
