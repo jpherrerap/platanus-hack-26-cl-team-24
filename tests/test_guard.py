@@ -368,7 +368,8 @@ class DemoTests(unittest.TestCase):
         self.assertIn("sofia · legal, senior_legal → PERMITIR\n   su rol puede recibir: offer_status", text)
         self.assertIn("0% → 11%", text)
         ana = text[text.index("━━ ana"):text.index("\nluis · vendor → PERMITIR")]
-        for line in ("ya pudo saber (75%): o17 · counterparty = betaai", "0% → 56%", "decisión: REVISIÓN HUMANA"):
+        for line in ("ya pudo saber (75%): o17 · counterparty = betaai", "0% → 56%", "decisión: REVISIÓN HUMANA",
+                     "Bandeja de entrada (sin cambios)\n   «El trámite vence el viernes. El expediente O-17 corresponde a BetaAI.»"):
             self.assertIn(line, ana)
         self.assertIn("Resumen\n   turno 1 «due»: ana PERMITIR · luis REPARAR · sofia PERMITIR · ines PERMITIR\n"
                       "   turno 2 «record»: ana REVISIÓN HUMANA · luis PERMITIR\n", text)

@@ -47,7 +47,7 @@ Frase: «Mismo texto, cuatro decisiones. Depende de quién lo recibe y qué ya s
 
 Ahora Ana y Luis piden la tarea «record» y el agente propone «El expediente O-17 ya está firmado.». Señala:
 
-- **ana**, bloque completo: el contexto ahora incluye «ya pudo saber (75%): o17 · counterparty = betaai», que es lo que ISDE le entregó en el turno 1 (75% es el peso de «entregado»). Con eso, `0% → 56%`, `RETENIDO`, y como la tarea no tiene otra alternativa: `REVISIÓN HUMANA · no hay alternativa segura; no se entrega nada`. Su bandeja sigue con el mensaje del turno 1.
+- **ana**, bloque completo: el contexto ahora incluye «ya pudo saber (75%): o17 · counterparty = betaai», que es lo que ISDE le entregó en el turno 1 (75% es el peso de «entregado»). Con eso, `0% → 56%`, `RETENIDO`, y como la tarea no tiene otra alternativa: `REVISIÓN HUMANA · no hay alternativa segura; no se entrega nada`. Su bandeja dice «(sin cambios)»: solo tiene el mensaje del turno 1.
 - **luis**: ya sabía que O-17 está firmado y nunca recibió la contraparte, así que `PERMITIR`.
 
 Frase: «Un guardrail que mira una respuesta a la vez habría dejado pasar las dos».

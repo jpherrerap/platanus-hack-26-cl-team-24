@@ -77,7 +77,8 @@ def story(guard, user, task, at, draft, paint, request_id=None):
            "review": "no hay alternativa segura; no se entrega nada"}[result["action"]]
     lines = ["", paint(f"━━ {user} · {roles} ━━", "1"), paint("Contexto", "1"), *known,
              paint("Evaluación", "1"), *evaluation,
-             "   decisión: " + paint(label, f"1;{code}") + f" · {why}", paint("Bandeja de entrada", "1")]
+             "   decisión: " + paint(label, f"1;{code}") + f" · {why}",
+             paint("Bandeja de entrada", "1") + (" (sin cambios)" if result["action"] == "review" else "")]
     lines += [f"   «{item['text']}»" for item in guard.inbox(user)] or ["   (vacía)"]
     return result, "\n".join(lines)
 
