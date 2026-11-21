@@ -35,4 +35,5 @@ La demo usa datos ficticios, corre en memoria y no necesita clave de Claude. La 
 - [docs/isde.md](docs/isde.md): cómo decide, política en YAML, historial persistente, integración con Claude y límites conocidos.
 - [docs/demo.md](docs/demo.md): guion de 3 minutos para presentar la demo.
 - [docs/inferencias-multinivel.md](docs/inferencias-multinivel.md): reglas y pruebas de inferencias encadenadas.
+- [isde/prompts.py](isde/prompts.py): guía general de la perspectiva adversarial por destinatario.
 - [project-description.md](project-description.md): ficha del proyecto.

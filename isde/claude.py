@@ -7,6 +7,7 @@ from pydantic import Field, ValidationError, model_validator
 
 from .privacy import rut_format_signals
 from .model import Grade, Hypothesis, Id, Model, Observation, Policy, Probability, Triple
+from .prompts import ADVERSARIAL_PROMPT
 
 
 class Snippet(Model):
@@ -184,14 +185,7 @@ class Interpretations(Model):
     hypotheses: list[Hypothesis] = Field(max_length=32)
 
 
-OBSERVER_ROLE = ("Adopta la perspectiva del destinatario de esta vista. Propón interpretaciones "
-                 "plausibles sobre entidades, atributos, relaciones o conclusiones del vocabulario. "
-                 "Para cada claim, p_if_seen estima la probabilidad de que este destinatario llegue "
-                 "a esa interpretación si ve el texto, dadas sus pistas anteriores. Distingue una "
-                 "interpretación plausible de una verdad o de una probabilidad de acceso. "
-                 "Considera lecturas ordinarias alternativas. Usa una cita literal del texto por "
-                 "hipótesis, reutiliza los identificadores de la vista y devuelve una lista vacía "
-                 "si no hay indicios. Usa la familia protegida pertinente cuando corresponda. No inventes titulares ni consultes fuentes externas.")
+OBSERVER_ROLE = ADVERSARIAL_PROMPT
 
 
 def assess_hypotheses(policy, text, graph_context, *, client=None, model=None):
