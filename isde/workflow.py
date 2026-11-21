@@ -40,8 +40,10 @@ class Flow(TypedDict, total=False):
     error: str | None
 
 
-def fingerprint(user: str, task: str, draft: str, day: date) -> str:
-    payload = json.dumps([user, task, draft, day.isoformat()], ensure_ascii=False, separators=(",", ":"))
+def fingerprint(user: str, task: str, draft: str, day: date, attachments=()) -> str:
+    # Attachment hashes join only when present so earlier request identities stay valid.
+    payload = json.dumps([user, task, draft, day.isoformat(), *([list(attachments)] if attachments else [])],
+                         ensure_ascii=False, separators=(",", ":"))
     return hashlib.sha256(payload.encode()).hexdigest()
 
 

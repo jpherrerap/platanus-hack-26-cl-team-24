@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .cli import EXAMPLES
 from .guard import Guard
+from .media import Attachment, with_attachments
 from .model import Batch, Case, Family, Policy
 from .prompts import DEFAULT_PROMPTS
 from .workflow import claude_rewrite, fingerprint, make_workflow
@@ -28,6 +29,7 @@ class Message(BaseModel):
     draft: str = Field(min_length=1, max_length=4000)
     request_id: str = Field(min_length=1, max_length=128)
     day: date
+    attachments: list[Attachment] = Field(default_factory=list, max_length=4)
 
 
 class NewReview(BaseModel):
@@ -343,7 +345,7 @@ def create_app(*, db: str | None = None, rewrite=claude_rewrite, seed=True, mode
                     raise ValueError("Destinatario fuera del directorio")
                 if item.task not in case.tasks:
                     raise ValueError("Tarea desconocida")
-                token = fingerprint(item.user, item.task, item.draft, item.day)
+                token = fingerprint(item.user, item.task, item.draft, item.day, [a.digest() for a in item.attachments])
                 previous = guard.db.execute(
                     "SELECT task,draft_hash,decision FROM deliveries WHERE org=? AND op=? AND audience=? AND request_id=?",
                     (*guard.scope, item.user, item.request_id),
@@ -354,9 +356,10 @@ def create_app(*, db: str | None = None, rewrite=claude_rewrite, seed=True, mode
                     stored = json.loads(previous[2])
                     return {"request_id": item.request_id, "action": stored["action"], "text": stored["text"]}
                 active_rewrite = (lambda draft, safe, task: claude_rewrite(draft, safe, task, prompt=prompts["rewriter"])) if rewrite is claude_rewrite else rewrite
-                flow = make_workflow(guard, active_rewrite).invoke({
+                # A file cannot be rewritten, so a risky attachment goes to review instead.
+                flow = make_workflow(guard, active_rewrite, max_rewrites=0 if item.attachments else 2).invoke({
                     "user": item.user, "task": item.task, "day": item.day, "request_id": item.request_id,
-                    "fingerprint": token, "candidate": item.draft, "rewrites": 0,
+                    "fingerprint": token, "candidate": with_attachments(item.draft, item.attachments), "rewrites": 0,
                 })
                 outcome = flow["outcome"]
                 return {"request_id": item.request_id, "action": outcome["action"], "text": outcome["text"]}

@@ -1418,6 +1418,47 @@ class AgentApiTests(unittest.TestCase):
         self.assertEqual(client.post("/v1/messages", json=self.request).json(), first.json())
         self.assertEqual(client.get("/v1/inbox/luis").json()["messages"], [])
 
+    def test_risky_image_attachment_goes_to_review_without_rewrite(self):
+        import base64
+        from isde.media import Transcript
+        seen = []
+        def fake(role, context, schema, client, model, media=None):
+            seen.append(media)
+            return Transcript(text="El expediente O-17 corresponde a BetaAI.")
+        png = base64.b64encode(b"\x89PNG fake").decode()
+        item = {**self.request, "draft": "El trámite vence el viernes.",
+                "attachments": [{"name": "acta.png", "media_type": "image/png", "data": png}]}
+        with mock.patch("isde.media._request", side_effect=fake):
+            result = self.client.post("/v1/messages", json=item)
+            self.assertEqual(result.status_code, 200, result.text)
+            self.assertEqual((result.json()["action"], result.json()["text"]), ("review", None))
+            self.assertEqual(self.client.post("/v1/messages", json=item).json(), result.json())
+            other = {**item, "attachments": [{**item["attachments"][0], "data": base64.b64encode(b"otro").decode()}]}
+            self.assertEqual(self.client.post("/v1/messages", json=other).status_code, 409)
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(seen[0][0]["source"], {"type": "base64", "media_type": "image/png", "data": png})
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.client.get("/v1/inbox/luis").json()["messages"], [])
+
+    def test_audio_attachment_is_transcribed_with_elevenlabs(self):
+        from isde.media import Attachment, with_attachments
+        sent = {}
+        class Http:
+            def post(self, url, headers, data, files):
+                sent.update(url=url, headers=headers, data=data, files=files)
+                return SimpleNamespace(status_code=200, json=lambda: {"text": "La oferta está firmada."})
+        audio = Attachment(name="nota.mp3", media_type="audio/mpeg", data="SUQz")
+        with mock.patch.dict(os.environ, {"ELEVENLABS_API_KEY": "k"}):
+            text = with_attachments("Hola.", [audio], http=Http())
+        self.assertEqual(text, "Hola.\n\n[Adjunto: nota.mp3]\nLa oferta está firmada.")
+        self.assertEqual((sent["headers"], sent["data"]), ({"xi-api-key": "k"}, {"model_id": "scribe_v2"}))
+        self.assertEqual(sent["files"]["file"], ("nota.mp3", b"ID3", "audio/mpeg"))
+        with mock.patch.dict(os.environ, {}, clear=True), mock.patch("isde.media.stt_key", return_value=None), \
+             self.assertRaisesRegex(ValueError, "ELEVENLABS_API_KEY"):
+            with_attachments("Hola.", [audio], http=Http())
+        with self.assertRaisesRegex(ValueError, "base64"):
+            Attachment(name="x.mp3", media_type="audio/mpeg", data="no es base64!").raw()
+
     def test_invalid_recipient_and_bad_data(self):
         self.assertEqual(self.client.post("/v1/messages", json={**self.request, "user":"unknown"}).status_code, 400)
         self.assertEqual(self.client.post("/v1/messages", json={**self.request, "request_id":"  "}).status_code, 422)
