@@ -162,8 +162,6 @@ class Guard:
     def run(self, user: str, task: str, at: date, request_id: str | None = None, *, draft: str | None = None):
         if not user or not task or (request_id is not None and not request_id.strip()):
             raise ValueError("Destinatario, tarea o identificador vacío")
-        if task not in self.case.tasks:
-            raise ValueError(f"Tarea desconocida: {task}")
         draft_hash = hashlib.sha256(draft.encode()).hexdigest() if draft is not None else None
         with self.transaction():
             if request_id is not None:
