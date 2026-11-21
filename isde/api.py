@@ -125,12 +125,16 @@ def create_app(*, db: str | None = None, rewrite=claude_rewrite, seed=True, mode
     @app.get("/v1/demo/config")
     def configuration():
         with lock:
-            return {"users": sorted({a.user for a in case.assignments if (a.org, a.operation) == (case.org, case.operation)}),
-                    "roles": sorted(policy.roles), "prompts": dict(prompts), "default_prompts": dict(DEFAULT_PROMPTS),
-                    "families": policy.model_dump()["families"],
-                    "grants": {name: role.receive for name, role in policy.roles.items()},
-                    "vocabulary": policy.vocabulary, "scope": {"org": case.org, "operation": case.operation},
-                    "day": date.today().isoformat()}
+            guard = open_guard()
+            try:
+                return {"users": sorted({a.user for a in case.assignments if (a.org, a.operation) == (case.org, case.operation)}),
+                        "roles": sorted(policy.roles), "prompts": dict(prompts), "default_prompts": dict(DEFAULT_PROMPTS),
+                        "families": policy.model_dump()["families"],
+                        "grants": {name: role.receive for name, role in policy.roles.items()},
+                        "vocabulary": guard.policy_at(date.max).vocabulary,
+                        "scope": {"org": case.org, "operation": case.operation}, "day": date.today().isoformat()}
+            finally:
+                guard.close()
 
     @app.put("/v1/demo/prompts/{agent}")
     def update_prompt(agent: str, item: PromptUpdate):
@@ -175,9 +179,11 @@ def create_app(*, db: str | None = None, rewrite=claude_rewrite, seed=True, mode
                         _, predicate, value = json.loads(encoded)
                         if predicate == name and not updated.families[name].accepts(value):
                             raise ValueError("Un estado existente quedaría fuera de la familia protegida")
+                vocab = {**guard.policy_at(date.max).vocabulary, **updated.vocabulary}
+                effective = updated.model_copy(update={"vocabulary": vocab})
                 for proposal in guard.proposed_rules(date.max):
                     from .model import Rule
-                    Rule.model_validate(proposal["rule"]).validate_policy(updated)
+                    Rule.model_validate(proposal["rule"]).validate_policy(effective)
                 with guard.transaction():
                     persist_config(guard, updated, prompts)
                 policy = updated
@@ -224,6 +230,12 @@ def create_app(*, db: str | None = None, rewrite=claude_rewrite, seed=True, mode
                            "recipients": {u: guard.model_context(u, source.at) for u in source.recipients}}
                 if current != context:
                     raise ValueError("El contexto cambió durante el análisis")
+                if result["missing_recipients"]:
+                    return {"preview_id": None, "observations": [e.model_dump(mode="json") for e in events],
+                            "message": "No se extrajeron pistas para: " + ", ".join(result["missing_recipients"]) +
+                                       ". No se guardó la fuente; vuelve a analizarla o modifica los destinatarios."}
+                if not events:
+                    return {"preview_id": None, "observations": [], "message": "No se extrajeron hechos ni reglas; no se guardó la fuente."}
                 token = secrets.token_hex(16)
                 if len(staged_sources) >= 32:
                     staged_sources.pop(next(iter(staged_sources)))
@@ -250,7 +262,8 @@ def create_app(*, db: str | None = None, rewrite=claude_rewrite, seed=True, mode
                     if previous:
                         if previous[0] != digest:
                             raise ValueError("Identificador de fuente usado con otro contenido")
-                        return {"accepted": False, "proposals": 0}
+                        if guard.source_has_content(source.origin):
+                            return {"accepted": False, "proposals": 0}
                     current = {"internal": guard.model_context(None, source.at),
                                "recipients": {u: guard.model_context(u, source.at) for u in source.recipients}}
                     if current != context:
@@ -331,13 +344,15 @@ def create_app(*, db: str | None = None, rewrite=claude_rewrite, seed=True, mode
                     if previous:
                         if previous[0] != digest:
                             raise ValueError("Identificador de fuente usado con otro contenido")
-                        return {"accepted": False, "proposals": 0}
+                        if guard.source_has_content(data.origin):
+                            return {"accepted": False, "proposals": 0}
                 result = source_graph(guard, model).invoke(
                     {"source": data, "accept": source.accept, "digest": digest})
                 events = result["internal"] + result["external"]
                 if source.accept:
                     return {"accepted": result["accepted"], "proposals": len(events)}
-                return {"accepted": False, "observations": [e.model_dump(mode="json") for e in events]}
+                return {"accepted": False, "observations": [e.model_dump(mode="json") for e in events],
+                        "missing_recipients": result["missing_recipients"]}
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             except Exception as exc:

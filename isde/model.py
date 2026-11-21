@@ -109,6 +109,19 @@ class RuleProposal(Model):
         self.rule.validate_policy(policy)
 
 
+class VocabularyProposal(Model):
+    predicate: Id
+    description: Annotated[str, Field(min_length=1, max_length=500)]
+    quote: Annotated[str, Field(min_length=1)]
+    confidence: Probability
+
+    def validate_source(self, text):
+        if self.predicate == INTRINSIC_FAMILY:
+            raise ValueError("El predicado de sensibilidad intrínseca está reservado")
+        if not self.description.strip() or not self.quote.strip() or not text or self.quote not in text:
+            raise ValueError("El concepto requiere descripción y cita literal de la fuente")
+
+
 class Policy(Model):
     version: Literal[1]
     roles: dict[Id, Role]
@@ -225,6 +238,7 @@ class Observation(Model):
     facts: list[Triple] = []
     hypotheses: list[Hypothesis] = []
     rules: list[RuleProposal] = Field(default_factory=list, max_length=32)
+    vocabulary: list[VocabularyProposal] = Field(default_factory=list, max_length=32)
     assessor: str = "adapter"
     at: date
     user: Id | None = None  # None is internal only.
@@ -235,8 +249,10 @@ class Observation(Model):
 
     @model_validator(mode="after")
     def audience(self):
-        if not self.facts and not self.hypotheses and not self.rules:
+        if not self.facts and not self.hypotheses and not self.rules and not self.vocabulary:
             raise ValueError("La observación está vacía")
+        if self.vocabulary and (self.user is not None or not self.quote):
+            raise ValueError("Los conceptos propuestos requieren fuente interna con cita")
         if self.rules and (self.user is not None or not self.quote):
             raise ValueError("Las reglas propuestas requieren fuente interna con cita")
         if self.hypotheses and (self.user is None or not self.quote):
