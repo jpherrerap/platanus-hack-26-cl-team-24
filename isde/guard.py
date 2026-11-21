@@ -181,8 +181,9 @@ class Guard:
                 if latest and at.isoformat() < latest:
                     raise ValueError("Una entrega nueva debe respetar el orden del historial")
             result, exposure = self._decide(user, task, at, draft)
-            if request_id is not None and exposure is not None:
-                for origin, fact, _ in exposure:
+            # A review is recorded too, so a retry returns it and the id cannot be reused for another request.
+            if request_id is not None:
+                for origin, fact, _ in exposure or []:
                     self._record(user, origin, [fact], at, "delivered")
                 self.db.execute("INSERT INTO deliveries VALUES (?,?,?,?,?,?,?,?)",
                                 (*self.scope, user, request_id, task, draft_hash, at.isoformat(), json.dumps(result)))
@@ -193,4 +194,5 @@ class Guard:
             SELECT request_id,decision FROM deliveries
             WHERE org=? AND op=? AND audience=? ORDER BY rowid
         """, (*self.scope, user))
-        return [{"id": key, "text": json.loads(raw)["text"]} for key, raw in rows]
+        # Reviewed requests are recorded without text; the recipient never sees them.
+        return [{"id": key, "text": text} for key, raw in rows if (text := json.loads(raw)["text"]) is not None]

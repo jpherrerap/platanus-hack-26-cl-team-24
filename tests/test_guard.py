@@ -107,6 +107,17 @@ class GuardTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.decision("luis", "signature", "once")
 
+    def test_review_is_recorded_under_its_request_id(self):
+        held = self.decision("luis", "signature", "held")
+        self.assertEqual(held["action"], "review")
+        before = self.g.records("luis", DAY)
+        self.assertEqual(self.decision("luis", "signature", "held"), held)
+        self.assertEqual(self.g.inbox("luis"), [])
+        self.assertEqual(self.g.records("luis", DAY), before)
+        for task, draft in [("due", None), ("signature", "otro borrador")]:
+            with self.assertRaises(ValueError):
+                self.g.run("luis", task, DAY, "held", draft=draft)
+
     def test_cumulative_across_deliveries_and_concurrency(self):
         self.case.clauses["just_sign"] = Clause(text="O-17 está firmado.", facts=[SIGN], provides=["describe"])
         for t, c in [("who","identify"),("state","just_sign")]:
