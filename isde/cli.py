@@ -109,6 +109,8 @@ def main(argv=None):
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("demo", help="Caso aislado y reproducible en memoria").add_argument(
         "--json", action="store_true", help="Salida JSON en lugar del relato")
+    commands.add_parser("serve", help="Demo visual en http://127.0.0.1 (en memoria, sin entregas)").add_argument(
+        "--port", type=int, default=8000)
     commands.add_parser("key", help="Guardar API key de Claude en el llavero")
     commands.add_parser("load", help="Registrar evidencia desde un adaptador de confianza").add_argument("file")
     for command, help_text in [("interpret", "Incorporar pistas de una tarjeta con triples validados"),
@@ -135,6 +137,10 @@ def main(argv=None):
             print("Clave guardada.")
             return 0
         policy, case = Policy.load(args.policy), Case.load(args.case)
+        if args.command == "serve":
+            from .serve import serve
+            serve(policy, case, Path(args.case).with_name("history.yaml"), args.port)
+            return 0
         guard = Guard(":memory:" if args.command == "demo" else args.db, policy, case)
         if args.command == "demo":
             demo(guard, policy, case, Path(args.case).with_name("history.yaml"), args.json)

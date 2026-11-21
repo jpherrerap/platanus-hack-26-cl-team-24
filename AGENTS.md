@@ -17,7 +17,8 @@ isde demo                                 # caso ficticio en memoria
 - `isde/graphs.py`: esquema OWL, roles vigentes por fecha, vista interna, vista del observador y probabilidades con ProbLog.
 - `isde/guard.py`: `Guard` con SQLite. `observe` registra evidencia, `_decide` elige la alternativa y `run` confirma la entrega en una sola transacción. `inbox` es lo único que ve el destinatario.
 - `isde/claude.py`: `interpret` y `propose`. Claude responde con una herramienta forzada y el código valida cada resultado.
-- `isde/cli.py`: CLI `isde` (`demo`, `key`, `load`, `interpret`, `propose`, `preview`, `deliver`, `inbox`).
+- `isde/serve.py`: demo visual local (stdlib `http.server`, solo vista previa).
+- `isde/cli.py`: CLI `isde` (`demo`, `serve`, `key`, `load`, `interpret`, `propose`, `preview`, `deliver`, `inbox`).
 - `examples/*.yaml`: política, caso, historial y fuentes de ejemplo (ficticios). Los tests los usan.
 
 ## Invariantes

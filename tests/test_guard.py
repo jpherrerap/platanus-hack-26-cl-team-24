@@ -158,6 +158,36 @@ class GuardTests(unittest.TestCase):
         self.assertEqual(self.decision("sofia", "signature")["action"], "review")
 
 
+class ServeTests(unittest.TestCase):
+    def setUp(self):
+        from isde.serve import respond
+        self.g = Guard(":memory:", Policy.load(ROOT / "policy.yaml"), Case.load(ROOT / "case.yaml"))
+        self.addCleanup(self.g.close)
+        self.g.observe(Batch.load(ROOT / "history.yaml").observations)
+        self.get = lambda path: respond(self.g, path)
+
+    def test_page_and_preview_without_delivery(self):
+        status, kind, page, nonce = self.get("/")
+        self.assertEqual((status, kind.split(";")[0]), (200, "text/html"))
+        self.assertIn(f'<script nonce="{nonce}">', page)
+        self.assertIn('<option value="sofia">', page)
+        status, _, body, _ = self.get("/api/preview?user=luis&task=due")
+        self.assertEqual((status, body["action"], body["text"]), (200, "repair", "El trámite vence el viernes."))
+        self.assertEqual(body["observer"]["kind"], "observer")
+        self.assertNotIn("betaai", str(body["observer"]))
+        self.assertEqual(self.g.inbox("luis"), [])
+
+    def test_boundary_validation_and_escaping(self):
+        self.assertEqual(self.get("/api/preview?user=mallory&task=due")[:3:2], (400, {"error": "Destinatario desconocido"}))
+        self.assertEqual(self.get("/api/preview?user=ana&task=x")[0], 400)
+        self.assertEqual(self.get("/api/preview?user=ana&task=due&draft=" + "a" * 2001)[0], 400)
+        self.assertEqual(self.get("/nada")[0], 404)
+        self.g.case.tasks["<script>"] = self.g.case.tasks["due"]
+        self.assertNotIn("<script>", self.get("/")[2].split("<option")[-1])
+        _, _, body, _ = self.get("/api/preview?user=ana&task=due&draft=%3Cb%3Ehola")
+        self.assertEqual((body["draft"], body["action"]), ("<b>hola", "repair"))
+
+
 class ClaudeTests(unittest.TestCase):
     def setUp(self):
         self.policy = Policy.load(ROOT / "policy.yaml")
