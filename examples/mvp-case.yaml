@@ -1,0 +1,7 @@
+org: organizacion_demo
+operation: operacion_demo
+assignments:
+  - {user: usuario_demo, role: usuario, org: organizacion_demo, operation: operacion_demo, start: 2000-01-01}
+  - {user: revisor_demo, role: revisor, org: organizacion_demo, operation: operacion_demo, start: 2000-01-01}
+clauses: {}
+tasks: {}

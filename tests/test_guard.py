@@ -25,6 +25,216 @@ LINK = ("o17", "counterparty", "betaai")
 GOAL = ("betaai", "offer_status", "signed")
 
 
+class GenericSecretTests(unittest.TestCase):
+    def setUp(self):
+        self.base = Policy.load(ROOT / "mvp-policy.yaml")
+        self.case = Case.load(ROOT / "mvp-case.yaml")
+
+    def policy(self):
+        data = self.base.model_dump()
+        data["families"] = {
+            "domicilio": {"description": "Domicilio", "any_value": True, "absolute": .75, "increase": .45},
+            "voto": {"description": "Voto", "any_value": True, "absolute": .75, "increase": .45},
+        }
+        return data
+
+    def test_unlisted_values_are_protected_without_enumeration(self):
+        data = self.policy()
+        policy = Policy.model_validate(data)
+        case = self.case.model_copy(deep=True)
+        case.clauses = {"first": Clause(text="roble", facts=[("p", "domicilio", "roble_10")], provides=["answer"]),
+                        "second": Clause(text="cedro", facts=[("q", "domicilio", "cedro_77")], provides=["answer"])}
+        case.tasks = {name: Task(requires=["answer"], options=[Option(clauses=[name])]) for name in case.clauses}
+        guard = Guard(":memory:", policy, case)
+        self.addCleanup(guard.close)
+        guard.observe([Observation(origin="source", at=DAY, facts=[("p","domicilio","roble_10"),
+                                                                    ("q","domicilio","cedro_77")])])
+        for task, text in [("first", "roble"), ("second", "cedro")]:
+            decision = guard.run("usuario_demo", task, DAY, draft=text, strict=True)
+            self.assertEqual(decision["action"], "review")
+            self.assertTrue(decision["attempts"][0]["blocked"][0]["direct"])
+        self.assertEqual(guard.inbox("usuario_demo"), [])
+        self.assertEqual(policy.families["domicilio"].statuses, [])
+
+    def test_unlisted_value_can_be_inferred_through_multiple_rules(self):
+        data = self.policy()
+        data["roles"]["usuario"]["receive"] = ["domicilio"]
+        data["vocabulary"].update({"tiene_mesa":"mesa de la dirección", "resultado":"resultado de mesa",
+                                    "voto_en_mesa":"mesa donde votó"})
+        data["rules"] = [
+            {"when": [["?p", "domicilio", "?d"], ["?d", "tiene_mesa", "?m"]],
+             "then": ["?p", "voto_en_mesa", "?m"]},
+            {"when": [["?p", "voto_en_mesa", "?m"], ["?m", "resultado", "?v"]],
+             "then": ["?p", "voto", "?v"]},
+        ]
+        policy = Policy.model_validate(data)
+        case = self.case.model_copy(deep=True)
+        case.clauses = {"respuesta": Clause(text="roble", facts=[("p","domicilio","roble_10")], provides=["answer"])}
+        case.tasks = {"libre": Task(requires=["answer"], options=[Option(clauses=["respuesta"])])}
+        guard = Guard(":memory:", policy, case)
+        self.addCleanup(guard.close)
+        bridge = [("roble_10","tiene_mesa","mesa_1"), ("mesa_1","resultado","lista_azul")]
+        guard.observe([Observation(origin="internal", at=DAY, facts=[("p","domicilio","roble_10"), *bridge]),
+                       Observation(origin="known", at=DAY, user="usuario_demo", grade="cited", facts=bridge)])
+        decision = guard.run("usuario_demo", "libre", DAY, draft="roble", strict=True)
+        self.assertEqual(decision["action"], "review")
+        blocked = decision["attempts"][0]["blocked"]
+        self.assertEqual([(b["family"], b["status"], b["direct"]) for b in blocked], [("voto", "lista_azul", False)])
+        self.assertAlmostEqual(blocked[0]["after"], .75 * .98)
+        self.assertEqual(policy.families["voto"].statuses, [])
+
+    def test_explicit_list_and_wildcard_are_unambiguous(self):
+        data = self.policy()
+        for config in [{"any_value": False, "statuses": []}, {"any_value": True, "statuses": ["x"]}]:
+            data["families"]["voto"].update(config)
+            with self.assertRaises(ValueError):
+                Policy.model_validate(data)
+        data["families"]["voto"].update({"any_value": False, "statuses": ["si", "no"]})
+        policy = Policy.model_validate(data)
+        self.assertTrue(policy.families["voto"].accepts("si"))
+        self.assertFalse(policy.families["voto"].accepts("quizas"))
+
+    def test_claude_can_propose_unlisted_values_and_hypotheses(self):
+        policy = Policy.model_validate(self.policy())
+        source = Source(origin="source", at=DAY, text="Demo vive en Roble 10.")
+        def client(payload):
+            block = SimpleNamespace(type="tool_use", name="select_evidence", input=payload)
+            return SimpleNamespace(messages=SimpleNamespace(create=lambda **_: SimpleNamespace(content=[block], stop_reason="tool_use")))
+        events = propose(policy, source, client=client({"items":[{"fact":["p","domicilio","roble_10"],
+                                                              "quote":"Demo vive en Roble 10.","confidence":.8}]}))
+        self.assertEqual(events[0].facts, [("p","domicilio","roble_10")])
+        view = {"kind":"observer", "roles":[], "possible_knowledge":[], "hypotheses":[]}
+        predictions = assess_hypotheses(policy, source.text, view,
+                                        client=client({"hypotheses":[{"claim":["p","voto","lista_nueva"],
+                                                                       "quote":"Roble 10", "p_if_seen":.8}]}))
+        self.assertEqual(predictions[0].claim, ("p","voto","lista_nueva"))
+
+    def test_adversarial_request_contains_generic_control_without_configured_secrets(self):
+        captured = {}
+        def create(**request):
+            captured.update(request)
+            block = SimpleNamespace(type="tool_use", name="select_evidence", input={"hypotheses":[]})
+            return SimpleNamespace(content=[block], stop_reason="tool_use")
+        client = SimpleNamespace(messages=SimpleNamespace(create=create))
+        view = {"kind":"observer", "roles":[], "possible_knowledge":[], "hypotheses":[]}
+        self.assertEqual(assess_hypotheses(self.base, "Hola.", view, client=client, prompt="Personalizado"), [])
+        context = json.loads(captured["messages"][0]["content"])
+        self.assertEqual(list(context["familias"]), ["intrinsic_sensitivity"])
+        self.assertTrue(context["familias"]["intrinsic_sensitivity"]["any_value"])
+        self.assertIn("incluso sin secretos", captured["system"].lower())
+
+    @unittest.skipUnless(all(importlib.util.find_spec(n) for n in ("fastapi", "langgraph", "httpx")),
+                         "Instala el extra api")
+    def test_default_profile_is_neutral_and_empty_policy_cannot_deliver(self):
+        from fastapi.testclient import TestClient
+        from isde.api import create_app
+        from isde.semantic import CandidateFact, DraftAssessment
+        class Model:
+            def analyze(self, policy, text, question):
+                return DraftAssessment(facts=[CandidateFact(fact=("p","actividad","dato"), quote="dato")],
+                                       covers_all_claims=True, fulfills_task=True)
+            def adversarial(self, policy, text, view):
+                return []
+        with tempfile.TemporaryDirectory() as folder, mock.patch.dict(os.environ, {}, clear=True):
+            client = TestClient(create_app(db=str(Path(folder)/"db.sqlite"), model=Model()))
+            config = client.get("/v1/demo/config").json()
+            self.assertEqual(config["families"], {})
+            self.assertEqual(config["users"], ["revisor_demo", "usuario_demo"])
+            self.assertNotIn("offer_status", str(config))
+            self.assertIn("Cualquier valor", client.get("/").text)
+            self.assertEqual(client.put("/v1/demo/vocabulary/actividad", json={"description":"Actividad"}).status_code, 200)
+            self.assertEqual(client.post("/v1/observations", json={"observations":[{"origin":"private", "at":DAY.isoformat(),
+                                  "facts":[["p","actividad","dato"]]}]}).status_code, 200)
+            body = {"review_id":"empty", "user":"usuario_demo", "task":"freeform", "question":"¿Qué dato?",
+                    "day":DAY.isoformat(), "text":"dato"}
+            self.assertEqual(client.post("/v1/reviews", json=body).json()["status"], "approved")
+            secret = {"description":"Cualquier actividad", "any_value":True,
+                      "absolute":.75, "increase":.45, "allowed_roles":[]}
+            self.assertEqual(client.put("/v1/demo/secrets/actividad", json=secret).status_code, 200)
+            self.assertTrue(client.get("/v1/demo/config").json()["families"]["actividad"]["any_value"])
+            self.assertEqual(client.put("/v1/demo/secrets/actividad", json={**secret, "any_value":False,
+                                      "statuses":["dato"]}).status_code, 400)
+            self.assertEqual(client.post("/v1/reviews", json={**body, "review_id":"wild"}).json()["status"], "revise")
+            self.assertEqual(client.get("/v1/inbox/usuario_demo").json()["messages"], [])
+
+    @unittest.skipUnless(all(importlib.util.find_spec(n) for n in ("fastapi", "langgraph", "httpx")),
+                         "Instala el extra api")
+    def test_adversary_detects_intrinsic_secret_with_empty_graph_and_allows_safe_greeting(self):
+        from fastapi.testclient import TestClient
+        from isde.api import create_app
+        from isde.semantic import DraftAssessment
+        class Model:
+            def analyze(self, policy, text, question):
+                greeting = text == "Hola."
+                return DraftAssessment(facts=[], covers_all_claims=greeting, fulfills_task=True,
+                                       has_factual_claims=not greeting)
+            def adversarial(self, policy, text, view):
+                self.assert_view = view
+                if text == "Hola.":
+                    return []
+                return [Hypothesis(claim=("persona", "intrinsic_sensitivity", "domicilio"),
+                                   quote="vive en Roble 10", p_if_seen=.9)]
+        with tempfile.TemporaryDirectory() as folder, mock.patch.dict(os.environ, {"MOSAIC_OPERATOR_TOKEN":"operator"}, clear=True):
+            path = str(Path(folder)/"db.sqlite")
+            client = TestClient(create_app(db=path, model=Model()))
+            self.assertEqual(client.get("/v1/demo/config").json()["families"], {})
+            data = {"review_id":"safe", "user":"usuario_demo", "task":"freeform", "question":"Saluda",
+                    "day":DAY.isoformat(), "text":"Hola."}
+            self.assertEqual(client.post("/v1/reviews", json=data).json()["status"], "approved")
+            safe = client.post("/v1/reviews/safe/deliver", json={"user":"usuario_demo"}).json()
+            self.assertEqual(safe, {"action":"allow", "text":"Hola."})
+            sensitive = {**data, "review_id":"sensitive", "question":"¿Dónde vive?",
+                         "text":"La persona vive en Roble 10."}
+            self.assertEqual(client.post("/v1/reviews", json=sensitive).json()["status"], "revise")
+            self.assertEqual(client.get("/v1/reviews/sensitive?user=usuario_demo").status_code, 403)
+            detailed = client.get("/v1/reviews/sensitive?user=usuario_demo",
+                                  headers={"X-Mosaic-Operator-Token":"operator"}).json()["trace"]
+            self.assertEqual(detailed["attempts"][0]["blocked"][0]["family"], "intrinsic_sensitivity")
+            guard = Guard(path, self.base, self.case)
+            try:
+                row = guard.db.execute("SELECT trace FROM semantic_reviews WHERE review_id='sensitive'").fetchone()
+                trace = json.loads(row[0])
+                self.assertEqual(trace["attempts"][0]["blocked"][0]["family"], "intrinsic_sensitivity")
+                self.assertAlmostEqual(trace["attempts"][0]["blocked"][0]["after"], .75 * .9)
+                self.assertEqual([entry["text"] for entry in guard.inbox("usuario_demo")], ["Hola."])
+            finally:
+                guard.close()
+
+    def test_intrinsic_risk_is_not_ignored_when_prior_category_is_known(self):
+        from isde.model import INTRINSIC_FAMILY
+        policy = self.base
+        case = self.case.model_copy(deep=True)
+        text = "Una dirección sensible."
+        case.clauses = {"draft": Clause(text=text, facts=[], provides=["answer"])}
+        case.tasks = {"check": Task(requires=["answer"], options=[Option(clauses=["draft"])])}
+        guard = Guard(":memory:", policy, case)
+        self.addCleanup(guard.close)
+        hypothesis = Hypothesis(claim=("p", INTRINSIC_FAMILY, "domicilio"), quote="dirección sensible", p_if_seen=.9)
+        guard.observe([Observation(origin="prior", at=DAY, user="usuario_demo", grade="cited",
+                                   quote=text, hypotheses=[hypothesis])])
+        decision, _ = guard._decide("usuario_demo", "check", DAY, text, {text:[hypothesis]}, "mock", strict=True)
+        self.assertEqual(decision["action"], "review")
+        self.assertEqual(decision["attempts"][0]["blocked"][0]["family"], INTRINSIC_FAMILY)
+
+    @unittest.skipUnless(all(importlib.util.find_spec(n) for n in ("fastapi", "langgraph", "httpx")),
+                         "Instala el extra api")
+    def test_adversarial_failure_does_not_approve_a_greeting(self):
+        from fastapi.testclient import TestClient
+        from isde.api import create_app
+        from isde.semantic import DraftAssessment
+        class Model:
+            def analyze(self, policy, text, question):
+                return DraftAssessment(facts=[], covers_all_claims=True, fulfills_task=True, has_factual_claims=False)
+            def adversarial(self, policy, text, view):
+                raise RuntimeError("modelo no disponible")
+        with tempfile.TemporaryDirectory() as folder, mock.patch.dict(os.environ, {}, clear=True):
+            client = TestClient(create_app(db=str(Path(folder)/"db.sqlite"), model=Model()))
+            body = {"review_id":"failure", "user":"usuario_demo", "task":"freeform", "question":"Saluda",
+                    "day":DAY.isoformat(), "text":"Hola."}
+            self.assertEqual(client.post("/v1/reviews", json=body).status_code, 503)
+            self.assertEqual(client.get("/v1/inbox/usuario_demo").json()["messages"], [])
+
+
 class DynamicOntologyTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -629,6 +839,11 @@ class AgentApiTests(unittest.TestCase):
         from fastapi.testclient import TestClient
         from isde.api import create_app
 
+        profile = mock.patch.dict(os.environ, {"ISDE_POLICY": str(ROOT / "policy.yaml"),
+                                  "ISDE_CASE": str(ROOT / "case.yaml"), "ISDE_HISTORY": str(ROOT / "history.yaml")})
+        profile.start()
+        self.addCleanup(profile.stop)
+
         self.tmp = TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.calls = []
@@ -873,6 +1088,11 @@ class SemanticApiTests(unittest.TestCase):
         from isde.api import create_app
         from isde.semantic import CandidateFact, DraftAssessment
         from isde.model import Observation
+
+        profile = mock.patch.dict(os.environ, {"ISDE_POLICY": str(ROOT / "policy.yaml"),
+                                  "ISDE_CASE": str(ROOT / "case.yaml"), "ISDE_HISTORY": str(ROOT / "history.yaml")})
+        profile.start()
+        self.addCleanup(profile.stop)
 
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)

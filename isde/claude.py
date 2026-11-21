@@ -6,7 +6,8 @@ from datetime import date
 from pydantic import Field, ValidationError, model_validator
 
 from .privacy import rut_format_signals
-from .model import Grade, Hypothesis, Id, Model, Observation, Policy, Probability, RuleProposal, Triple
+from .model import (Grade, Hypothesis, Id, INTRINSIC_FAMILY, Model, Observation, Policy, Probability,
+                    RuleProposal, Triple, intrinsic_family)
 from .prompts import ADVERSARIAL_PROMPT, INTERNAL_ONTOLOGY_PROMPT
 
 
@@ -190,14 +191,22 @@ class Interpretations(Model):
 
 
 OBSERVER_ROLE = ADVERSARIAL_PROMPT
+INTRINSIC_INSTRUCTION = (
+    " Incluso sin secretos configurados ni historial, busca información que pueda ser sensible. "
+    "Si no corresponde a una familia explícita, propón una hipótesis con predicado intrinsic_sensitivity, "
+    "identificadores válidos, una cita literal del texto y p_if_seen; no supongas sensibilidad sin indicios."
+)
 
 
 def assess_hypotheses(policy, text, graph_context, *, client=None, model=None, prompt=None):
-    context = {"familias": policy.model_dump()["families"], "vocabulario": policy.vocabulary,
+    families = {**policy.model_dump()["families"], INTRINSIC_FAMILY: intrinsic_family().model_dump(mode="json")}
+    context = {"familias": families, "vocabulario": policy.vocabulary,
                "reglas": [chain.model_dump() for chain in policy.chains],
                "reglas_logicas": [rule.model_dump() for rule in policy.rules],
                "vista": observer_context(graph_context), "texto": text, "formato_numerico": rut_format_signals(text)}
-    result = _request(OBSERVER_ROLE if prompt is None else prompt, context, Interpretations, client, model)
+    role = OBSERVER_ROLE if prompt is None else prompt
+    role += " Una familia con any_value true admite cualquier valor con identificador válido." + INTRINSIC_INSTRUCTION
+    result = _request(role, context, Interpretations, client, model)
     for h in result.hypotheses:
         h.validate_source(policy, text)
     return result.hypotheses
@@ -218,16 +227,18 @@ def propose(policy: Policy, source: Source, grade: Grade | None = None, *, graph
         role = "Extrae en items únicamente triples explícitos de esta fuente. "
         role += "En items, confidence estima que el observador conozca la afirmación explícita. "
         role += OBSERVER_ROLE if adversarial_prompt is None else adversarial_prompt
+        role += INTRINSIC_INSTRUCTION
         schema = ObserverSuggestions
     result = _request(role + " Usa identificadores canónicos en minúsculas y predicados del vocabulario "
-                      "o familias. Conserva los estados definidos. Devuelve una cita literal por triple.",
+                      "o familias. Usa los estados definidos, salvo que any_value sea true. "
+                      "Devuelve una cita literal por triple.",
                       context, schema, client, model)
     events = []
     for item in result.items:
         subject, predicate, value = item.fact
         if item.quote not in source.text or predicate not in (policy.vocabulary.keys() | policy.families.keys()):
             raise ValueError("Propuesta fuera de vocabulario o sin cita válida")
-        if predicate in policy.families and value not in policy.families[predicate].statuses:
+        if predicate in policy.families and not policy.families[predicate].accepts(value):
             raise ValueError("Estado desconocido")
         events.append(Observation(origin=source.origin, at=source.at, user=source.user, grade=grade,
                                   facts=[(subject, predicate, value)], quote=item.quote, resource=source.resource,

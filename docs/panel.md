@@ -10,13 +10,21 @@ python -m uvicorn isde.api:create_app --factory --host 127.0.0.1 --port 8001
 
 Abre http://127.0.0.1:8001/. En vez del llavero también puedes configurar `ANTHROPIC_API_KEY` en el entorno. Las llamadas para analizar fuentes o respuestas usan Claude y pueden tener costo. El panel es para una integración de confianza en un proceso local: no lo publiques en red sin autenticación y control de acceso.
 
+La configuración inicial del panel usa `mvp-policy.yaml`, `mvp-case.yaml` y `mvp-history.yaml`: no tiene secretos de un caso empresarial predefinido y contiene dos destinatarios ficticios, `usuario_demo` y `revisor_demo`. Los destinatarios y roles se definen en YAML; el panel aún no crea ni autentica usuarios reales.
+
 ## Agentes
 
 En «Agentes y prompts» elige y edita la instrucción del constructor de ontología, analista adversarial, analista de respuestas o reformulador de catálogo. Puedes restaurar los textos iniciales. El modelo Claude se selecciona de forma global con `MOSAIC_CLAUDE_MODEL`; los prompts son independientes por agente. La política se entrega como contexto a los agentes de análisis. El reformulador de `/v1/messages` recibe una alternativa de catálogo que el motor ya encontró admisible. En la revisión de texto libre, un agente externo o el operador aporta la reformulación.
 
 ## Secretos y vocabulario
 
-En «Secretos y acceso» selecciona o crea una conclusión protegida: su identificador, descripción, estados posibles y umbrales. Marca los roles con permiso directo para recibirla; los demás roles pueden heredar permisos de sus roles superiores. Los identificadores y estados deben usar minúsculas, números o guion bajo, y comenzar con una letra. El panel no permite eliminar conclusiones ni quitar estados protegidos existentes.
+En «Secretos y acceso» selecciona o crea una conclusión protegida: su identificador, descripción y umbrales. Por defecto, «Cualquier valor» protege cada valor de esa relación sin tener que enumerarlo; por ejemplo, cada domicilio que el modelo pueda representar. «Solo valores específicos» conserva la opción de proteger una lista cerrada. Marca los roles con permiso directo para recibirla; otros roles pueden heredar esos permisos. El panel no permite eliminar conclusiones, quitar valores protegidos o cambiar de «Cualquier valor» a una lista más restringida.
+
+La regla `any_value: true` no almacena automáticamente domicilios ni garantiza que el modelo reconozca todos los datos: una fuente debe aportar el hecho y el modelo debe extraerlo con una cita válida. Las ternas actuales usan identificadores canónicos de hasta 96 caracteres, no texto arbitrario; equivalencias, ambigüedades, traducción de texto libre y detección universal siguen siendo límites del MVP.
+
+Incluso sin familias configuradas, la API semántica pide al analista adversarial buscar indicios de información sensible en el texto. Las hipótesis genéricas usan internamente el predicado reservado `intrinsic_sensitivity`, con cita literal y una estimación del modelo. Para este control de partida, una exposición estimada de al menos 0,45 retiene el borrador; estas cifras no están calibradas. Una respuesta sin afirmaciones verificables, como un saludo, puede aprobarse si los modelos la consideran adecuada y no identifican riesgo. Las afirmaciones que no se puedan representar o verificar siguen en revisión.
+
+Este análisis genérico es probabilístico y puede omitir información sensible o generar falsos positivos; no garantiza confidencialidad. No se asignan permisos por rol a la categoría genérica, por lo que también puede retener un dato que una política específica permitiría. El flujo de catálogo y la demo antigua no invocan este análisis por defecto; la API semántica sí lo hace y ante un fallo no aprueba la entrega.
 
 Los conceptos ordinarios para hechos y reglas intermedias se agregan en «Conceptos y relaciones». Las conclusiones protegidas van en «Secretos y acceso». El modelo solo puede proponer hechos y reglas expresables con el vocabulario y las familias de la política; no descubre automáticamente un vocabulario ilimitado ni crea permisos.
 
@@ -27,6 +35,10 @@ Los conceptos ordinarios para hechos y reglas intermedias se agregan en «Concep
 3. En «Probar una respuesta», selecciona el destinatario y escribe una tarea y un borrador. «Evaluar respuesta» revisa si satisface la tarea y si podría revelar conclusiones protegidas.
 4. Si pide reformulación, cambia el texto y vuelve a evaluarlo. Si se aprueba, «Confirmar entrega» vuelve a verificar el contexto y actualiza la bandeja local.
 
+Para ver las hipótesis y la traza privada en la página, inicia la API con `MOSAIC_OPERATOR_TOKEN` definido y escribe el mismo token en «Ver análisis privado». El token no se guarda en el panel. Los destinatarios no reciben la traza.
+
 La tarea y el texto son libres, pero la extracción debe poder representarse con la política y los hechos deben estar respaldados en la ontología interna. Las reglas propuestas por el modelo se usan de manera conservadora en el cálculo de riesgo y no verifican por sí solas como verdaderas las respuestas. Las estimaciones no están calibradas. La validación de citas y sintaxis no demuestra que las inferencias de Claude sean correctas o completas.
 
-Los cambios de prompts, secretos, vocabulario y permisos se guardan en SQLite, por organización y operación. Tras editar la configuración, las revisiones aprobadas anteriormente se deben evaluar de nuevo. La base se controla con `MOSAIC_API_DB` (por defecto `mosaic-api.sqlite`); una configuración ya guardada tiene prioridad sobre el YAML inicial para esa base. Los destinatarios y roles siguen viniendo del archivo de caso y política. La página no controla agentes externos ni envía correos reales.
+Los cambios de prompts, secretos, vocabulario y permisos se guardan en SQLite, por organización y operación. Tras editar la configuración, las revisiones aprobadas anteriormente se deben evaluar de nuevo. La base se controla con `MOSAIC_API_DB` (por defecto `mosaic-api.sqlite`); una configuración ya guardada para el mismo ámbito tiene prioridad sobre el YAML inicial. Los ámbitos guardados antes no se borran. Los destinatarios y roles siguen viniendo del archivo de caso y política. La página no controla agentes externos ni envía correos reales.
+
+El caso empresarial anterior sigue disponible de manera explícita con `MOSAIC_POLICY=examples/policy.yaml`, `MOSAIC_CASE=examples/case.yaml` y `MOSAIC_HISTORY=examples/history.yaml`; utiliza una base separada si quieres mantenerlo aislado. La demo de catálogo `python -m isde serve` no cambia.

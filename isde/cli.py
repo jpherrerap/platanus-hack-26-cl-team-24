@@ -56,7 +56,7 @@ def story(guard, user, task, at, draft, paint, request_id=None):
         blocked = {(b["subject"], b["family"], b["status"]) for b in attempt["blocked"]}
         for change in attempt["changes"]:
             goal = (change["subject"], change["family"], change["status"])
-            rule = guard.policy.families[change["family"]]
+            rule = guard.risk_policy(at).families[change["family"]]
             if goal not in blocked:
                 verdict = f"bajo el umbral ({pct(rule.absolute)} o +{pct(rule.increase)})"
             elif change["direct"]:

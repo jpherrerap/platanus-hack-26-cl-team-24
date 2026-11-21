@@ -217,17 +217,18 @@ def probabilities(policy: Policy, view: Graph):
         for fact in facts:
             potential.add(rdf_fact(fact))
     close_rules(potential, rules)
-    targets = defaultdict(set)
-    for subject, predicate, _ in potential:
-        subject_text, predicate_text = str(subject), str(predicate)
-        if subject_text.startswith(str(E)) and predicate_text.startswith(str(P)):
+    targets = defaultdict(lambda: defaultdict(set))
+    for subject, predicate, value in potential:
+        subject_text, predicate_text, value_text = str(subject), str(predicate), str(value)
+        if subject_text.startswith(str(E)) and predicate_text.startswith(str(P)) and value_text.startswith(str(E)):
             family = predicate_text.removeprefix(str(P))
             if family in policy.families:
-                targets[family].add(subject_text.removeprefix(str(E)))
+                targets[family][subject_text.removeprefix(str(E))].add(value_text.removeprefix(str(E)))
     queries = {}
     for family, subjects in targets.items():
-        for subject in subjects:
-            for status in policy.families[family].statuses:
+        for subject, reachable in subjects.items():
+            statuses = reachable if policy.families[family].any_value else policy.families[family].statuses
+            for status in statuses:
                 fact = (subject, family, status)
                 args = ",".join(symbols[value] for value in fact)
                 query = f"known({args})"

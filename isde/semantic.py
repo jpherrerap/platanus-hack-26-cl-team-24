@@ -20,6 +20,7 @@ class DraftAssessment(Model):
     facts: list[CandidateFact] = Field(max_length=64)
     covers_all_claims: bool
     fulfills_task: bool
+    has_factual_claims: bool = True
 
 
 class ClaudeAnalysis:
@@ -31,7 +32,7 @@ class ClaudeAnalysis:
         context = {"text": text, "task": task, "vocabulary": policy.vocabulary,
                    "protected_families": policy.model_dump()["families"]}
         return _request(
-            self.prompts["analyst"],
+            self.prompts["analyst"] + " Una familia con any_value true admite cualquier valor con identificador válido.",
             context, schema, None, None,
         )
 
@@ -125,7 +126,7 @@ def inspect_graph(guard: Guard, model: ClaudeAnalysis):
                 raise ValueError("Afirmación sin cita literal")
             if predicate not in guard.policy.vocabulary and predicate not in guard.policy.families:
                 raise ValueError("Relación fuera de la política")
-            if predicate in guard.policy.families and value not in guard.policy.families[predicate].statuses:
+            if predicate in guard.policy.families and not guard.policy.families[predicate].accepts(value):
                 raise ValueError("Estado fuera de la política")
         return {"analysis": analysis, "context": guard.model_context(state["user"], state["day"]),
                 "internal": guard.model_context(None, state["day"])}
@@ -158,10 +159,6 @@ def inspect_graph(guard: Guard, model: ClaudeAnalysis):
 
 def score_candidate(guard, state):
     analysis = state["analysis"]
-    if not analysis.covers_all_claims or not analysis.fulfills_task:
-        return {"action": "review", "text": None, "attempts": [{"reason": "unverified_task_or_claims"}]}, None
-    if not analysis.facts:
-        return {"action": "review", "text": None, "attempts": [{"reason": "no_verifiable_facts"}]}, None
     original = guard.case
     candidate = original.model_copy(deep=True)
     candidate.clauses["mosaic_candidate"] = Clause(
@@ -174,4 +171,10 @@ def score_candidate(guard, state):
                                    {state["text"]: state["hypotheses"]}, model_id(), strict=True)
     finally:
         guard.case = original
+    if result["action"] != "allow":
+        return result, None
+    if not analysis.covers_all_claims or not analysis.fulfills_task:
+        return {"action": "review", "text": None, "attempts": [{"reason": "unverified_task_or_claims"}]}, None
+    if not analysis.facts and analysis.has_factual_claims:
+        return {"action": "review", "text": None, "attempts": [{"reason": "no_verifiable_facts"}]}, None
     return result, exposure

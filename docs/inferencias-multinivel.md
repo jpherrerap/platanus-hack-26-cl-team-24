@@ -15,6 +15,8 @@ La respuesta debe ser `review`. La traza identifica la familia `d` y muestra que
 
 Cada átomo contiene sujeto, predicado y objeto. Los nombres que empiezan por `?` son variables. Los predicados deben estar declarados en `vocabulary` o `families`. Las variables de la conclusión deben aparecer en alguna premisa. Cita `"yes"` en YAML para que se interprete como texto.
 
+Una familia puede usar `any_value: true` en lugar de `statuses`: así protege cualquier valor representable que aparezca o se derive en el grafo. Esto no enumera todos los valores posibles ni garantiza la extracción desde texto libre. Las familias con `statuses` siguen limitadas a los valores declarados.
+
 ```yaml
 rules:
   - when: [["?x", a, "yes"]]
