@@ -87,10 +87,13 @@ def interpret(policy: Policy, card: Card, grade: Grade | None = None, *, graph_c
 
 def _request(role, context, schema, client, model):
     if client is None:
-        from anthropic import Anthropic
         key = credentials()
         if not key:
             raise ValueError("Configura la clave con isde key o ANTHROPIC_API_KEY")
+        try:
+            from anthropic import Anthropic
+        except ImportError as exc:
+            raise ValueError("Instala el extra claude") from exc
         client = Anthropic(api_key=key, timeout=25, max_retries=1)
     model = model or os.environ.get("ISDE_CLAUDE_MODEL", "claude-haiku-4-5-20251001")
     response = client.messages.create(

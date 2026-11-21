@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import sqlite3
 import sys
 from datetime import date
 from pathlib import Path
@@ -13,6 +14,9 @@ ACTIONS = {"allow": ("PERMITIR", "32"), "repair": ("REPARAR", "33"), "review": (
 REASONS = {"unmapped_draft": "no coincide con ninguna respuesta del catálogo",
            "incomplete_task": "la alternativa no completa la tarea",
            "unverified_content": "contiene hechos sin respaldo en el grafo interno"}
+# Installed wheels carry the examples as isde/examples; a source checkout keeps them at the repo root.
+HERE = Path(__file__).resolve().parent
+EXAMPLES = HERE / "examples" if (HERE / "examples").is_dir() else HERE.parent / "examples"
 
 
 def show(value):
@@ -102,9 +106,9 @@ def demo(guard, policy, case, history, as_json):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="ISDE · evaluación local de respuestas de agentes")
-    parser.add_argument("--policy", default="examples/policy.yaml")
-    parser.add_argument("--case", default="examples/case.yaml")
+    parser = argparse.ArgumentParser(prog="isde", description="ISDE · evaluación local de respuestas de agentes")
+    parser.add_argument("--policy", default=str(EXAMPLES / "policy.yaml"))
+    parser.add_argument("--case", default=str(EXAMPLES / "case.yaml"))
     parser.add_argument("--db", default="isde.sqlite")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("demo", help="Caso aislado y reproducible en memoria").add_argument(
@@ -163,8 +167,9 @@ def main(argv=None):
             at = getattr(args, "at", None) or date.today()
             show(guard.run(args.user, args.task, at, getattr(args, "request_id", None), draft=args.draft))
         return 0
-    except (ValueError, KeyError, OSError, ImportError) as exc:
-        print(f"ISDE: {exc}", file=sys.stderr)
+    except (ValueError, KeyError, OSError, ImportError, sqlite3.Error) as exc:
+        # One line for the operator; any remaining multi-line detail stays out of the terminal.
+        print(f"ISDE: {str(exc).splitlines()[0] if str(exc) else type(exc).__name__}", file=sys.stderr)
         return 2
     finally:
         if guard:

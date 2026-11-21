@@ -16,4 +16,7 @@ claude = ["anthropic>=0.75,<3", "keyring>=25,<26"]
 isde = "isde.cli:main"
 
 [tool.setuptools]
-packages = ["isde"]
+# Ship the example YAMLs inside the package so `isde demo` works from any directory after a plain install.
+packages = ["isde", "isde.examples"]
+package-dir = {"isde.examples" = "examples"}
+package-data = {"isde.examples" = ["*.yaml"]}

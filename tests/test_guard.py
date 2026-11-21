@@ -2,11 +2,13 @@ import concurrent.futures
 import contextlib
 import io
 import json
+import os
 import tempfile
 import unittest
 from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 from isde.cli import main
 from isde.claude import Card, Source, interpret, propose
@@ -245,3 +247,43 @@ class DemoTests(unittest.TestCase):
         results = json.loads(self.demo("--json"))
         self.assertEqual([r["user"] for r in results], ["ana", "luis", "sofia", "ines"])
         self.assertEqual(results[1]["text"], "El trámite vence el viernes.")
+
+
+class CliTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = Path(self.tmp.name)
+
+    def cli(self, *argv):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = main(["--db", str(self.dir / "state.sqlite"), *argv])
+        return code, out.getvalue(), err.getvalue()
+
+    def test_demo_runs_outside_repo_root(self):
+        cwd = os.getcwd()
+        os.chdir(self.dir)
+        self.addCleanup(os.chdir, cwd)
+        code, out, _ = self.cli("demo")
+        self.assertEqual(code, 0)
+        self.assertIn("━━ ines", out)
+
+    def test_input_errors_are_one_spanish_line(self):
+        (self.dir / "bad.yaml").write_text("a: [1\n")
+        (self.dir / "empty.yaml").write_text("")
+        (self.dir / "wrong.yaml").write_text("observations: 3\n")
+        cases = [(["load", str(self.dir / "missing.yaml")], "No existe el archivo"),
+                 (["load", str(self.dir / "bad.yaml")], "YAML inválido"),
+                 (["load", str(self.dir / "empty.yaml")], "debe contener un mapeo"),
+                 (["load", str(self.dir / "wrong.yaml")], "no es válido en observations"),
+                 (["preview", "luis", "nope"], "Tarea desconocida: nope"),
+                 (["--db", str(self.dir / "no" / "x.sqlite"), "inbox", "luis"], "No se puede abrir la base de datos")]
+        with mock.patch("isde.claude.credentials", return_value=None):
+            cases.append((["propose", str(ROOT / "internal-source.yaml")], "Configura la clave"))
+            cases.append((["interpret", str(ROOT / "vendor-card.yaml"), "--grade", "possible_access"], "Configura la clave"))
+            for argv, message in cases:
+                code, _, err = self.cli(*argv)
+                self.assertEqual(code, 2, argv)
+                self.assertEqual(err.count("\n"), 1, err)
+                self.assertIn(message, err)

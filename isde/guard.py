@@ -19,15 +19,18 @@ class Guard:
             raise ValueError("Rol del directorio desconocido")
         self.schema = make_schema(policy)
         self.scope = (case.org, case.operation)
-        self.db = sqlite3.connect(db, isolation_level=None, timeout=15)
-        self.db.executescript("""
-            CREATE TABLE IF NOT EXISTS evidence (
-                org TEXT, op TEXT, audience TEXT, origin TEXT, fact TEXT, day TEXT,
-                grade TEXT, cap REAL, quote TEXT, PRIMARY KEY(org, op, audience, origin, fact, day, grade));
-            CREATE TABLE IF NOT EXISTS deliveries (
-                org TEXT, op TEXT, audience TEXT, request_id TEXT, task TEXT, draft_hash TEXT, day TEXT,
-                decision TEXT, PRIMARY KEY(org, op, audience, request_id));
-        """)
+        try:
+            self.db = sqlite3.connect(db, isolation_level=None, timeout=15)
+            self.db.executescript("""
+                CREATE TABLE IF NOT EXISTS evidence (
+                    org TEXT, op TEXT, audience TEXT, origin TEXT, fact TEXT, day TEXT,
+                    grade TEXT, cap REAL, quote TEXT, PRIMARY KEY(org, op, audience, origin, fact, day, grade));
+                CREATE TABLE IF NOT EXISTS deliveries (
+                    org TEXT, op TEXT, audience TEXT, request_id TEXT, task TEXT, draft_hash TEXT, day TEXT,
+                    decision TEXT, PRIMARY KEY(org, op, audience, request_id));
+            """)
+        except sqlite3.Error as exc:
+            raise ValueError(f"No se puede abrir la base de datos {db}") from exc
 
     @contextmanager
     def transaction(self):
@@ -159,6 +162,8 @@ class Guard:
     def run(self, user: str, task: str, at: date, request_id: str | None = None, *, draft: str | None = None):
         if not user or not task or (request_id is not None and not request_id.strip()):
             raise ValueError("Destinatario, tarea o identificador vacío")
+        if task not in self.case.tasks:
+            raise ValueError(f"Tarea desconocida: {task}")
         draft_hash = hashlib.sha256(draft.encode()).hexdigest() if draft is not None else None
         with self.transaction():
             if request_id is not None:

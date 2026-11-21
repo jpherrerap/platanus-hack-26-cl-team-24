@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 Id = Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]{0,95}$")]
 Probability = Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
@@ -17,7 +17,24 @@ class Model(BaseModel):
 
     @classmethod
     def load(cls, path: str | Path):
-        return cls.model_validate(yaml.safe_load(Path(path).read_text(encoding="utf-8")))
+        # Every input file passes through here, so errors name the file in one Spanish line.
+        try:
+            data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+        except FileNotFoundError as exc:
+            raise ValueError(f"No existe el archivo {path}") from exc
+        except (OSError, UnicodeDecodeError) as exc:
+            raise ValueError(f"No se puede leer el archivo {path}") from exc
+        except yaml.YAMLError as exc:
+            mark = getattr(exc, "problem_mark", None)
+            raise ValueError(f"YAML inválido en {path}" + (f", línea {mark.line + 1}" if mark else "")) from exc
+        if not isinstance(data, dict):
+            raise ValueError(f"{path} debe contener un mapeo YAML")
+        try:
+            return cls.model_validate(data)
+        except ValidationError as exc:
+            first = exc.errors()[0]
+            where = ".".join(map(str, first["loc"])) or "raíz"
+            raise ValueError(f"{path} no es válido en {where}: {first['msg'].removeprefix('Value error, ')}") from exc
 
 
 class Role(Model):
