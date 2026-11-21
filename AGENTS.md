@@ -1,4 +1,4 @@
-# ISDE
+# mosAIc
 
 Guardrail que revisa la respuesta de un agente antes de entregarla. Estima con ProbLog cuánto subiría la probabilidad de que el destinatario deduzca una conclusión protegida, combinando un grafo RDF/OWL interno con la evidencia de lo que el destinatario ya pudo saber. Descripción completa en `docs/isde.md`.
 

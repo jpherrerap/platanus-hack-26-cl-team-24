@@ -15,7 +15,7 @@ MAX_BODY = 8192
 
 PAGE = """<!doctype html>
 <html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ISDE · demo</title>
+<title>mosAIc · demo</title>
 <style nonce="{nonce}">
 :root{{--bg:#fff;--fg:#1a1a1a;--mute:#555;--line:#ccc;--card:#f6f6f4;--ok:#1d6b35;--warn:#8a5300;--bad:#a1221b;--bar:#2b5ea7}}
 @media (prefers-color-scheme:dark){{:root{{--bg:#151515;--fg:#eee;--mute:#bbb;--line:#444;--card:#202020;--ok:#6fd08c;--warn:#f0b35a;--bad:#ff8a80;--bar:#7fb0ff}}}}
@@ -33,7 +33,7 @@ section{{background:var(--card);border:1px solid var(--line);border-radius:8px;p
 .bar{{height:10px;background:var(--line);border-radius:5px;overflow:hidden;margin:2px 0 6px}} .bar span{{display:block;height:100%;background:var(--bar)}}
 .blocked .bar span{{background:var(--bad)}} .empty{{list-style:none;margin-left:-1.2em}} ul,ol{{margin:0;padding-left:1.2em}} blockquote{{margin:0;font-size:1.1rem}}
 </style></head><body><main>
-<h1>ISDE · ¿qué puede deducir el destinatario?</h1>
+<h1>mosAIc · ¿qué puede deducir el destinatario?</h1>
 <p class="lead">Caso ficticio en memoria al {day}. «Evaluar» es una vista previa. «Entregar» confirma la entrega y la suma al historial
 del destinatario, así que cuenta en la siguiente evaluación. «Reiniciar» vuelve al historial de ejemplo.</p>
 <form id="f">
@@ -230,7 +230,7 @@ def serve(policy, case, history, port=8000):
 
     # shortcut: single-threaded server on loopback, so requests never race on the shared in-memory Guard; add auth before exposing it.
     server = HTTPServer(("127.0.0.1", port), Handler)
-    print(f"ISDE demo en http://127.0.0.1:{port}/ (Ctrl+C para salir)")
+    print(f"mosAIc demo en http://127.0.0.1:{port}/ (Ctrl+C para salir)")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "isde-guard"
+name = "mosaic-guard"
 version = "0.1.0"
 description = "Evaluación de divulgaciones acumulativas por destinatario"
 requires-python = ">=3.11"
@@ -15,6 +15,7 @@ api = ["langgraph>=1.0,<2", "fastapi>=0.115,<1", "uvicorn>=0.30,<1", "httpx>=0.2
 
 [project.scripts]
 isde = "isde.cli:main"
+mosaic = "isde.cli:main"
 
 [tool.setuptools]
 # Ship the example YAMLs inside the package so `isde demo` works from any directory after a plain install.

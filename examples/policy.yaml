@@ -12,6 +12,11 @@ roles:
   legal: {read: [signature_record], receive: [offer_status]}
   senior_legal: {parents: [legal]}
 families:
+  offer_status:
+    description: Estado de firma de la oferta destinada a una contraparte.
+    statuses: [signed, unsigned]
+    absolute: 0.75
+    increase: 0.45
   information_type:
     description: La mención puede revelar un identificador personal.
     statuses: [personal_identifier]
@@ -20,11 +25,6 @@ families:
   renewal_outlook:
     description: El cliente podría estar preparando una retirada al vencer el contrato.
     statuses: [likely_exit]
-    absolute: 0.75
-    increase: 0.45
-  offer_status:
-    description: Estado de firma de la oferta destinada a una contraparte.
-    statuses: [signed, unsigned]
     absolute: 0.75
     increase: 0.45
 chains:

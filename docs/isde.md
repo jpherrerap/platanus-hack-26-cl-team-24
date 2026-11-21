@@ -1,8 +1,10 @@
-# ISDE
+# mosAIc
 
-ISDE revisa una respuesta antes de entregarla a un destinatario. La primera versión ofrece una API Python y una CLI para una bandeja local. El ejemplo es ficticio.
+mosAIc revisa una respuesta antes de entregarla a un destinatario. La primera versión ofrece una API Python y una CLI para una bandeja local. El ejemplo es ficticio.
 
 ## Ejecutar desde la raíz del repositorio
+
+Si ya instalaste el paquete anterior `isde-guard` en este entorno, ejecuta `python -m pip uninstall isde-guard` antes de instalar `mosaic-guard`. También puedes usar un entorno virtual nuevo.
 
 Requiere Python 3.11 o posterior.
 
@@ -86,7 +88,7 @@ finally:
     guard.close()
 ```
 
-Esta versión entrega respuestas compuestas de cláusulas previamente asociadas a hechos y requisitos de tarea. Un borrador que coincide con una alternativa se evalúa primero. Para texto libre desconocido, el guardrail busca la respuesta de catálogo más corta que complete la tarea y pase la evaluación. El catálogo y su correspondencia entre texto y triples son entradas de confianza. El análisis semántico de borradores arbitrarios, los grupos de destinatarios y la correlación entre distintas operaciones quedan para próximas versiones.
+La CLI y la demo web original entregan respuestas de catálogo. La API semántica descrita más abajo evalúa borradores libres con Claude y admite reformulaciones de un agente externo.
 
 ## Modelo de amenazas y límites
 
@@ -100,7 +102,7 @@ Qué supone o no cubre:
 
 - Confía en la integración: identidad, roles, directorio, catálogo de cláusulas y su correspondencia con hechos. Si esas entradas mienten, la decisión también.
 - Solo conoce las cadenas de deducción configuradas. Una inferencia que la política no describe no se detecta.
-- No analiza texto libre arbitrario. Un borrador que no coincide con el catálogo se reemplaza por la respuesta aprobada más corta que cumple la tarea.
+- La demo de catálogo reemplaza un borrador desconocido por una respuesta aprobada. La API semántica depende de la cobertura de extracción de Claude.
 - No modela colusión entre destinatarios, grupos ni correlación entre operaciones.
 - Las probabilidades dependen de pesos sin calibrar y de suponer independencia entre orígenes distintos.
 - `interpret` y `propose` envían a Anthropic la política y el texto de la fuente. Para una fuente interna también envían los hechos del grafo interno. Para una externa, solo lo atribuido a ese destinatario y sus roles.
@@ -108,7 +110,7 @@ Qué supone o no cubre:
 
 ## API HTTP con reformulación del agente
 
-La API de demostración recibe el borrador de un agente y usa LangGraph para evaluar, pedir una reformulación y volver a evaluar. Claude genera la reformulación con la alternativa del catálogo que el guardrail encontró admisible. ISDE evalúa el texto generado nuevamente al confirmar la entrega. Si Claude falla, el texto no coincide con el catálogo o se agotan dos intentos, la solicitud queda en revisión.
+La API de demostración recibe el borrador de un agente y usa LangGraph para evaluar, pedir una reformulación y volver a evaluar. Claude genera la reformulación con la alternativa del catálogo que el guardrail encontró admisible. mosAIc evalúa el texto generado nuevamente al confirmar la entrega. Si Claude falla, el texto no coincide con el catálogo o se agotan dos intentos, la solicitud queda en revisión.
 
 ```bash
 python -m pip install -e '.[api]'
@@ -130,7 +132,7 @@ La respuesta contiene `request_id`, `action` y `text`. Los estados son `allow`, 
 
 Un adaptador de confianza puede registrar información recibida con `POST /v1/observations`, usando el mismo formato de `examples/history.yaml`. La API persiste evidencia y entregas en `isde-api.sqlite`. La ruta puede cambiarse con `ISDE_API_DB`. Los archivos de política, caso e historial inicial pueden sustituirse con `ISDE_POLICY`, `ISDE_CASE` e `ISDE_HISTORY`.
 
-Esta API es una demo local de un único proceso para integraciones de confianza. El agente que llama aporta destinatario, tarea e identificador de solicitud. Para un servicio accesible por red se necesita autenticación, autorización de esos datos y un adaptador de entrega real. La evaluación sigue limitada a cláusulas previamente vinculadas a hechos. Si llega un texto libre, Claude debe reformularlo en una alternativa del catálogo. Las hipótesis adversariales generales se encuentran en otra rama y todavía no participan en este flujo.
+Esta API es una demo local de un único proceso para integraciones de confianza. El agente que llama aporta destinatario, tarea e identificador de solicitud. Para un servicio accesible por red se necesita autenticación, autorización de esos datos y un adaptador de entrega real. Este endpoint de catálogo conserva el ciclo de reformulación con Claude. Los endpoints semánticos siguientes reciben revisiones de un agente externo y usan la vista adversarial.
 ## RUT de personas
 
 Antes de entregar una respuesta, el canal general comprueba el texto final y los hechos asociados a sus cláusulas. Aplica la misma comprobación a las alternativas de reparación. Retiene valores con formato usual de RUT (cuerpo de siete u ocho cifras y dígito verificador válido), incluso sin etiqueta. Si el texto identifica expresamente el valor como RUT o RUN, también lo retiene con un verificador mal escrito. Un número de otro sistema que coincida con ese formato también puede pasar a revisión.
@@ -159,3 +161,37 @@ isde load hipotesis.json
 Para evaluar las interpretaciones de las respuestas candidatas, usa `isde preview luis due --assess` o activa `assess_drafts: true` en la política. Esta opción requiere Claude y envía a la API el texto candidato, el vocabulario y la vista del destinatario. Las vistas previas y las alternativas descartadas dejan intacto su historial. La entrega confirma únicamente las hipótesis de la respuesta que efectivamente llega a la bandeja. Si el modelo falla o cambia la vista mientras se evalúa, el mensaje queda en revisión.
 
 La política de ejemplo incluye `information_type` y `renewal_outlook`. Las señales de formato, como el dígito verificador, se calculan localmente y ayudan al modelo a interpretar el contexto. Las protecciones existentes para identificadores explícitos siguen aplicándose.
+
+## API semántica de mosAIc
+
+La API usa LangGraph para procesar fuentes y para revisar texto libre. Se instala con `python -m pip install -e '.[api]'` y se inicia con `python -m uvicorn isde.api:create_app --factory --host 127.0.0.1 --port 8001`. Configura `ANTHROPIC_API_KEY` o ejecuta `mosaic key`. El modelo puede elegirse con `MOSAIC_CLAUDE_MODEL`.
+
+Un adaptador de confianza puede proponer hechos y perspectivas de destinatarios mediante `POST /v1/sources`. El cuerpo contiene `origin`, `at`, `text` y `recipients`. La llamada devuelve propuestas con citas literales. Para aceptarlas, envía el mismo cuerpo con `accept: true`. La aceptación se registra una vez por origen y contenido. También se pueden incorporar observaciones estructuradas con `POST /v1/observations`.
+
+Un agente externo revisa su borrador con `POST /v1/reviews`. El ejemplo usa los hechos del caso de prueba.
+
+```bash
+curl -s http://127.0.0.1:8001/v1/reviews \
+  -H 'Content-Type: application/json' \
+  -d '{"review_id":"ejemplo-1","user":"luis","task":"due","day":"2026-01-04","question":"¿Cuándo vence el trámite?","text":"El plazo acaba el viernes. O-17 corresponde a BetaAI."}'
+```
+
+Si la respuesta indica `revise`, el agente crea un borrador nuevo y lo envía con un identificador de revisión.
+
+```bash
+curl -s http://127.0.0.1:8001/v1/reviews/ejemplo-1/revisions \
+  -H 'Content-Type: application/json' \
+  -d '{"revision_id":"intento-1","user":"luis","text":"El plazo acaba el viernes."}'
+```
+
+Tras recibir `approved`, la integración solicita la entrega. La operación comprueba de nuevo el historial y los hechos, y registra una sola entrega en la bandeja local.
+
+```bash
+curl -s http://127.0.0.1:8001/v1/reviews/ejemplo-1/deliver \
+  -H 'Content-Type: application/json' -d '{"user":"luis"}'
+curl -s http://127.0.0.1:8001/v1/inbox/luis
+```
+
+El detalle privado puede consultarse en `GET /v1/reviews/ejemplo-1?user=luis` cuando la API se inicia con `MOSAIC_OPERATOR_TOKEN` configurado y la petición incluye la cabecera `X-Mosaic-Operator-Token`. Las respuestas provisionales no actualizan el historial. Los reintentos con el mismo identificador de revisión y texto son idempotentes. Si cambia el contexto antes de entregar, se devuelve `context_changed` y el agente puede solicitar una nueva revisión. Se permiten dos reformulaciones.
+
+Claude debe extraer una cita literal para cada afirmación y evaluar si la respuesta cumple la tarea. Los hechos deben corresponder al vocabulario y contar con respaldo interno. También propone hipótesis desde la vista individual del destinatario. Una extracción incompleta o un error del proveedor impide la aprobación. Estos controles dependen de la calidad de extracción del modelo y las probabilidades no están calibradas. La API funciona como demo local para integraciones de confianza y la bandeja es local. La entrega por correo u otro servicio requiere un adaptador y autenticación.

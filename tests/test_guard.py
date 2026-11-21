@@ -668,3 +668,208 @@ class HypothesisTests(ClaudeTests):
             different = Guard(db, self.policy, case.model_copy(update={"operation": "other"}))
             self.addCleanup(different.close)
             self.assertEqual(different.hypotheses("ines", DAY), [])
+
+
+@unittest.skipUnless(
+    all(importlib.util.find_spec(name) for name in ("fastapi", "langgraph", "httpx")),
+    "Instala el extra api para ejecutar estas pruebas",
+)
+class SemanticApiTests(unittest.TestCase):
+    def setUp(self):
+        from fastapi.testclient import TestClient
+        from isde.api import create_app
+        from isde.semantic import CandidateFact, DraftAssessment
+        from isde.model import Observation
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+        class Model:
+            def analyze(self, policy, text, question):
+                facts = []
+                if "viernes" in text.lower():
+                    facts.append(CandidateFact(fact=("o17","deadline","friday"), quote="viernes"))
+                if "BetaAI" in text:
+                    facts.append(CandidateFact(fact=LINK, quote="BetaAI"))
+                return DraftAssessment(facts=facts, covers_all_claims="DESCONOCIDO" not in text,
+                                       fulfills_task="viernes" in text.lower())
+
+            def adversarial(self, policy, text, view):
+                assert view["kind"] == "observer"
+                assert "internal" not in view
+                return []
+
+            def source(self, policy, source, grade, context):
+                fact = ("o17","signature","signed")
+                assert source.text == "O-17 firmado."
+                return [Observation(origin=source.origin, at=source.at, user=source.user, grade=grade,
+                                    facts=[fact], quote="O-17 firmado.",
+                                    confidence=.9 if source.user else None)]
+
+        self.path = str(Path(self.tmp.name) / "semantic.sqlite")
+        self.client = TestClient(create_app(db=self.path, model=Model()))
+        self.data = {"review_id":"rev-1", "user":"luis", "task":"due", "day":"2026-01-04",
+                     "question":"¿Cuándo vence el trámite?",
+                     "text":"El plazo acaba el viernes. O-17 pertenece a BetaAI."}
+
+    def test_external_agent_revises_then_delivers_exact_message(self):
+        denied = self.client.post("/v1/reviews", json=self.data)
+        self.assertEqual((denied.status_code, denied.json()["status"]), (200, "revise"))
+        self.assertEqual(self.client.get("/v1/inbox/luis").json()["messages"], [])
+        revision = {"user":"luis", "revision_id":"revision1", "text":"El plazo acaba el viernes."}
+        approved = self.client.post("/v1/reviews/rev-1/revisions", json=revision)
+        self.assertEqual((approved.status_code, approved.json()["status"]), (200, "approved"))
+        self.assertEqual(self.client.post("/v1/reviews/rev-1/revisions", json=revision).json(), approved.json())
+        self.assertEqual(self.client.get("/v1/inbox/luis").json()["messages"], [])
+        result = self.client.post("/v1/reviews/rev-1/deliver", json={"user":"luis"})
+        self.assertEqual(result.json(), {"action":"repair","text":revision["text"]})
+        self.assertEqual(self.client.post("/v1/reviews/rev-1/deliver", json={"user":"luis"}).json(), result.json())
+        self.assertEqual(self.client.get("/v1/inbox/luis").json()["messages"],
+                         [{"id":"semantic:rev-1", "text":revision["text"]}])
+        self.assertEqual(self.client.post("/v1/reviews/rev-1/deliver", json={"user":"ana"}).status_code, 400)
+
+    def test_changed_context_prevents_stale_delivery(self):
+        data = {**self.data, "user":"ana", "text":"El plazo acaba el viernes. O-17 pertenece a BetaAI."}
+        self.assertEqual(self.client.post("/v1/reviews", json=data).json()["status"], "approved")
+        event = {"observations":[{"origin":"new_note", "user":"ana", "grade":"cited",
+                                  "at":"2026-01-04", "facts":[SIGN]}]}
+        self.assertEqual(self.client.post("/v1/observations", json=event).status_code, 200)
+        outcome = self.client.post("/v1/reviews/rev-1/deliver", json={"user":"ana"}).json()
+        self.assertEqual(outcome["reason"], "context_changed")
+        self.assertEqual(self.client.get("/v1/inbox/ana").json()["messages"], [])
+        revised = {"user":"ana", "revision_id":"fresh-context", "text":"El plazo acaba el viernes."}
+        self.assertEqual(self.client.post("/v1/reviews/rev-1/revisions", json=revised).json()["status"], "approved")
+        self.assertEqual(self.client.post("/v1/reviews/rev-1/deliver", json={"user":"ana"}).json()["action"], "repair")
+
+    def test_ingest_graph_proposes_then_accepts_and_retries(self):
+        src = {"origin":"newmail", "at":"2026-01-04", "text":"O-17 firmado.", "recipients":["ana"]}
+        proposed = self.client.post("/v1/sources", json=src)
+        self.assertEqual((proposed.status_code, len(proposed.json()["observations"])), (200, 2))
+        data = {**self.data, "user":"ana"}
+        self.assertEqual(self.client.post("/v1/reviews", json=data).json()["status"], "approved")
+        accepted = self.client.post("/v1/sources", json={**src, "accept":True})
+        self.assertTrue(accepted.json()["accepted"])
+        self.assertFalse(self.client.post("/v1/sources", json={**src, "accept":True}).json()["accepted"])
+        self.assertEqual(self.client.post("/v1/reviews/rev-1/deliver", json={"user":"ana"}).json()["reason"],
+                         "context_changed")
+        data["review_id"] = "rev-2"
+        self.assertEqual(self.client.post("/v1/reviews", json=data).json()["status"], "revise")
+
+    def test_incomplete_analysis_goes_to_revision_without_leak(self):
+        data = {**self.data, "user":"ana", "text":"El plazo acaba el viernes. DESCONOCIDO"}
+        self.assertEqual(self.client.post("/v1/reviews", json=data).json()["status"], "revise")
+        self.assertEqual(self.client.get("/v1/inbox/ana").json()["messages"], [])
+
+
+    def test_hypotheses_are_scoped_and_only_delivered_for_accepted_response(self):
+        from fastapi.testclient import TestClient
+        from isde.api import create_app
+        from isde.model import Hypothesis
+        from isde.semantic import CandidateFact, DraftAssessment
+
+        class HypothesisModel:
+            def analyze(self, policy, text, question):
+                return DraftAssessment(facts=[CandidateFact(fact=("o17", "deadline", "friday"), quote="viernes")],
+                                       covers_all_claims=True, fulfills_task=True)
+
+            def adversarial(self, policy, text, view):
+                assert view["kind"] == "observer"
+                return [Hypothesis(claim=("cliente_nube", "renewal_outlook", "likely_exit"),
+                                   quote="viernes", p_if_seen=.1)]
+
+        client = TestClient(create_app(db=self.path, model=HypothesisModel()))
+        data = {**self.data, "user":"ana", "text":"El plazo acaba el viernes."}
+        result = client.post("/v1/reviews", json=data).json()
+        self.assertEqual(result["status"], "approved")
+        case, policy = Case.load(ROOT/"case.yaml"), Policy.load(ROOT/"policy.yaml")
+        guard = Guard(self.path, policy, case)
+        try:
+            self.assertEqual(guard.hypotheses("ana", DAY), [])
+        finally:
+            guard.close()
+        client.post("/v1/reviews/rev-1/deliver", json={"user":"ana"})
+        guard = Guard(self.path, policy, case)
+        try:
+            self.assertEqual(len(guard.hypotheses("ana", DAY)), 1)
+            self.assertEqual(guard.hypotheses("luis", DAY), [])
+            self.assertNotIn("cliente_nube", str(guard.model_context(None, DAY)))
+        finally:
+            guard.close()
+
+    def test_review_rejects_unsupported_or_incomplete_extraction(self):
+        data = {**self.data, "user":"ana", "text":"El plazo acaba el viernes. DESCONOCIDO"}
+        self.assertEqual(self.client.post("/v1/reviews", json=data).json()["status"], "revise")
+        self.assertEqual(self.client.get("/v1/inbox/ana").json()["messages"], [])
+
+    def test_review_and_revision_idempotency(self):
+        original = self.client.post("/v1/reviews", json=self.data)
+        self.assertEqual(self.client.post("/v1/reviews", json=self.data).json(), original.json())
+        self.assertEqual(self.client.post("/v1/reviews", json={**self.data, "text":"texto diferente"}).status_code, 400)
+        revision = {"user":"luis", "revision_id":"r1", "text":"El plazo acaba el viernes."}
+        result = self.client.post("/v1/reviews/rev-1/revisions", json=revision)
+        self.assertEqual(self.client.post("/v1/reviews/rev-1/revisions", json=revision).json(), result.json())
+        self.assertEqual(self.client.post("/v1/reviews/rev-1/revisions",
+                                         json={**revision, "text":"otra cosa"}).status_code, 400)
+
+
+    def test_intake_failure_has_no_partial_graph_updates(self):
+        from fastapi.testclient import TestClient
+        from isde.api import create_app
+        from isde.model import Observation
+        class Broken:
+            def source(self, policy, source, grade, context):
+                if source.user:
+                    raise RuntimeError("falló la fuente")
+                return [Observation(origin=source.origin, at=source.at,
+                                    facts=[("o17","signature","signed")])]
+        client = TestClient(create_app(db=self.path, model=Broken()))
+        payload = {"origin":"failing", "at":"2026-01-04", "text":"O-17 firmado.",
+                   "recipients":["ana"], "accept":True}
+        self.assertEqual(client.post("/v1/sources", json=payload).status_code, 503)
+        guard = Guard(self.path, Policy.load(ROOT/"policy.yaml"), Case.load(ROOT/"case.yaml"))
+        try:
+            self.assertFalse(any(origin == "src:failing" for origin, _, _ in guard.records("", DAY)))
+            self.assertFalse(any(origin == "src:failing" for origin, _, _ in guard.records("ana", DAY)))
+        finally:
+            guard.close()
+
+    def test_review_rejects_a_false_quote(self):
+        from fastapi.testclient import TestClient
+        from isde.api import create_app
+        from isde.semantic import CandidateFact, DraftAssessment
+        class BadModel:
+            def analyze(self, policy, text, question):
+                return DraftAssessment(facts=[CandidateFact(fact=LINK, quote="una cita inventada")],
+                                       covers_all_claims=True, fulfills_task=True)
+            def adversarial(self, policy, text, context):
+                raise AssertionError("invalid extraction must stop first")
+        client = TestClient(create_app(db=self.path, model=BadModel()))
+        self.assertEqual(client.post("/v1/reviews", json=self.data).status_code, 400)
+        self.assertEqual(client.get("/v1/inbox/luis").json()["messages"], [])
+
+    def test_source_id_cannot_be_reused_for_changed_content(self):
+        src = {"origin":"stablemail", "at":"2026-01-04", "text":"O-17 firmado.",
+               "recipients":["ana"], "accept":True}
+        self.assertTrue(self.client.post("/v1/sources", json=src).json()["accepted"])
+        changed = {**src, "recipients":["luis"]}
+        self.assertEqual(self.client.post("/v1/sources", json=changed).status_code, 400)
+
+
+    def test_private_trace_requires_operator_token(self):
+        from fastapi.testclient import TestClient
+        from isde.api import create_app
+        from unittest.mock import patch
+        with patch.dict("os.environ", {"MOSAIC_OPERATOR_TOKEN":"operator-demo-secret"}):
+            client = TestClient(create_app(db=self.path, model=type("M", (), {
+                "analyze": lambda _, policy, text, question: __import__("isde.semantic", fromlist=["DraftAssessment"]).DraftAssessment(
+                    facts=[{"fact":["o17","deadline","friday"],"quote":"viernes"}],
+                    covers_all_claims=True, fulfills_task=True),
+                "adversarial": lambda _, policy, text, view: [],
+            })()))
+        data = {**self.data, "user":"ana", "text":"El plazo acaba el viernes."}
+        self.assertEqual(client.post("/v1/reviews", json=data).json()["status"], "approved")
+        url = "/v1/reviews/rev-1?user=ana"
+        self.assertEqual(client.get(url).status_code, 403)
+        self.assertEqual(client.get(url, headers={"X-Mosaic-Operator-Token":"incorrecto"}).status_code, 403)
+        response = client.get(url, headers={"X-Mosaic-Operator-Token":"operator-demo-secret"})
+        self.assertEqual((response.status_code, response.json()["status"]), (200, "approved"))

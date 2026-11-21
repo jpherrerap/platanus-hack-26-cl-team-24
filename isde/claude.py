@@ -110,7 +110,7 @@ def interpret(policy: Policy, card: Card, grade: Grade | None = None, *, graph_c
 
 
 def model_id(model=None):
-    return model or os.environ.get("ISDE_CLAUDE_MODEL", "claude-haiku-4-5-20251001")
+    return model or os.environ.get("MOSAIC_CLAUDE_MODEL", os.environ.get("ISDE_CLAUDE_MODEL", "claude-haiku-4-5-20251001"))
 
 
 def _request(role, context, schema, client, model):
@@ -177,7 +177,7 @@ class Suggestions(Model):
 
 class ObserverSuggestions(Suggestions):
     items: list[SuggestedFact] = Field(default_factory=list, max_length=64)
-    hypotheses: list[Hypothesis] = Field(max_length=32)
+    hypotheses: list[Hypothesis] = Field(default_factory=list, max_length=32)
 
 
 class Interpretations(Model):

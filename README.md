@@ -1,6 +1,6 @@
 # team-24 Platanus Hack 26: Santiago ft. Buk Project
 
-<img src="./project-logo.png" alt="Logo de ISDE" width="200" />
+<img src="./project-logo.png" alt="Logo de mosAIc" width="200" />
 
 Track: 🛡️ AI Security
 
@@ -12,9 +12,9 @@ team-24
 - Diego Agustín Moreno Guzmán ([@diegomorenoxor](https://github.com/diegomorenoxor))
 - Sebastián Nicolás Ferrá Sepúlveda ([@sebastianferra](https://github.com/sebastianferra))
 
-## ISDE
+## mosAIc
 
-ISDE es un guardrail que revisa la respuesta de un agente de IA antes de entregarla. Detecta cuándo una frase inocente, sumada a lo que el destinatario ya sabe, le permitiría deducir un secreto, y en ese caso entrega una versión que igual cumple la tarea o la deja en revisión. Hoy trabaja sobre un catálogo de respuestas aprobadas y vinculadas a hechos, no sobre texto libre.
+mosAIc es un guardrail que revisa la respuesta de un agente de IA antes de entregarla. Detecta cuándo una frase inocente, sumada a lo que el destinatario ya sabe, le permitiría deducir un secreto, y en ese caso entrega una versión que igual cumple la tarea o la deja en revisión. La API evalúa borradores libres mediante extracción con Claude, una vista adversarial por destinatario y reglas verificables. La demo visual funciona con un catálogo de ejemplos.
 
 ## Probarlo
 
@@ -28,7 +28,7 @@ python -m isde demo
 python -m unittest discover -s tests
 ```
 
-La demo usa datos ficticios, corre en memoria y no necesita clave de Claude. `python -m isde serve` muestra el mismo caso como página local en http://127.0.0.1:8000/.
+La demo usa datos ficticios, corre en memoria y no necesita clave de Claude. La API de texto libre requiere una clave y el extra de instalación `api`. `python -m isde serve` muestra el mismo caso como página local en http://127.0.0.1:8000/.
 
 ## Documentación
 

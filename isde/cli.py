@@ -97,11 +97,11 @@ def demo(guard, policy, case, history, as_json):
                       "Lo entregado en el turno 1 ya es historial. Mismo borrador para ambos:"))
     paint, results, summary = painter(sys.stdout), [], []
     if not as_json:
-        print(paint(f"ISDE · {case.org}/{case.operation} · decide qué llega a cada bandeja", "1"))
+        print(paint(f"mosAIc · {case.org}/{case.operation} · decide qué llega a cada bandeja", "1"))
         for name, family in policy.families.items():
             print(f"Conclusión protegida: {name}\n   {family.description.rstrip('.').lower()}")
     for number, (current, day, users, note) in enumerate(turns, 1):
-        # The agent proposes the most useful catalog answer; ISDE decides what is actually delivered.
+        # The agent proposes the most useful catalog answer; mosAIc decides what is actually delivered.
         draft = guard.render(case.tasks[current].options[0])
         if not as_json:
             print("\n" + paint(f"Turno {number} · {day.isoformat()} · tarea «{current}» · piden: {', '.join(users)}",
@@ -122,7 +122,7 @@ def demo(guard, policy, case, history, as_json):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(prog="isde", description="ISDE · evaluación local de respuestas de agentes")
+    parser = argparse.ArgumentParser(prog="mosaic", description="mosAIc · evaluación local de respuestas de agentes")
     parser.add_argument("--policy", default=str(EXAMPLES / "policy.yaml"))
     parser.add_argument("--case", default=str(EXAMPLES / "case.yaml"))
     parser.add_argument("--db", default="isde.sqlite")
@@ -186,7 +186,7 @@ def main(argv=None):
         return 0
     except (ValueError, KeyError, OSError, ImportError, sqlite3.Error) as exc:
         # One line for the operator; any remaining multi-line detail stays out of the terminal.
-        print(f"ISDE: {str(exc).splitlines()[0] if str(exc) else type(exc).__name__}", file=sys.stderr)
+        print(f"mosAIc: {str(exc).splitlines()[0] if str(exc) else type(exc).__name__}", file=sys.stderr)
         return 2
     finally:
         if guard:

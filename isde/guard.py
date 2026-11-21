@@ -20,7 +20,10 @@ class Guard:
             raise ValueError("Rol del directorio desconocido")
         self.schema = make_schema(policy)
         self.scope = (case.org, case.operation)
-        self.db = sqlite3.connect(db, isolation_level=None, timeout=15)
+        try:
+            self.db = sqlite3.connect(db, isolation_level=None, timeout=15)
+        except sqlite3.Error as exc:
+            raise ValueError("No se puede abrir la base de datos") from exc
         self.db.executescript("""
             CREATE TABLE IF NOT EXISTS evidence (
                 org TEXT, op TEXT, audience TEXT, origin TEXT, fact TEXT, day TEXT,
@@ -29,6 +32,17 @@ class Guard:
                 org TEXT, op TEXT, audience TEXT, origin TEXT, claim TEXT, day TEXT, grade TEXT,
                 cap REAL, p_if_seen REAL, quote TEXT, assessor TEXT,
                 PRIMARY KEY(org, op, audience, origin, claim, day, grade, quote, assessor));
+            CREATE TABLE IF NOT EXISTS source_imports (
+                org TEXT, op TEXT, source_id TEXT, digest TEXT,
+                PRIMARY KEY(org, op, source_id));
+            CREATE TABLE IF NOT EXISTS semantic_reviews (
+                org TEXT, op TEXT, review_id TEXT, user TEXT, task TEXT, day TEXT, question TEXT,
+                original_hash TEXT, revision INTEGER, text TEXT, analysis TEXT,
+                hypotheses TEXT, snapshot TEXT, status TEXT, trace TEXT,
+                PRIMARY KEY(org, op, review_id));
+            CREATE TABLE IF NOT EXISTS semantic_revisions (
+                org TEXT, op TEXT, review_id TEXT, revision_id TEXT, digest TEXT, response TEXT,
+                PRIMARY KEY(org, op, review_id, revision_id));
             CREATE TABLE IF NOT EXISTS deliveries (
                 org TEXT, op TEXT, audience TEXT, request_id TEXT, task TEXT, draft_hash TEXT, day TEXT,
                 decision TEXT, PRIMARY KEY(org, op, audience, request_id));
@@ -72,8 +86,16 @@ class Guard:
                                  p_seen=min(cap, self.policy.evidence[grade]))
                 for origin, claim, day, grade, cap, conditional, quote, assessor in rows]
 
-    def observe(self, observations: list[Observation]):
+    def observe(self, observations: list[Observation], *, source_id=None, source_digest=None):
         with self.transaction():
+            if source_id is not None:
+                previous = self.db.execute(
+                    "SELECT digest FROM source_imports WHERE org=? AND op=? AND source_id=?",
+                    (*self.scope, source_id)).fetchone()
+                if previous:
+                    if previous[0] != source_digest:
+                        raise ValueError("Identificador de fuente usado con otro contenido")
+                    return False
             for event in observations:
                 permitted = self.policy.vocabulary.keys() | self.policy.families.keys()
                 if any(predicate not in permitted for _, predicate, _ in event.facts):
@@ -94,6 +116,10 @@ class Guard:
                 self._record(event.user or "", "src:" + event.origin, event.facts, event.at,
                              event.grade or "internal", 1. if event.confidence is None else event.confidence,
                              event.quote)
+            if source_id is not None:
+                self.db.execute("INSERT INTO source_imports VALUES (?,?,?,?)",
+                                (*self.scope, source_id, source_digest))
+            return True
 
     def records(self, user, at):
         rows = self.db.execute("""

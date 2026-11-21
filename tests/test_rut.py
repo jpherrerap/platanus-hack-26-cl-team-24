@@ -4,7 +4,7 @@ from datetime import date
 from pathlib import Path
 
 from isde.guard import Guard
-from isde.model import Case, Clause, Observation, Option, Policy, Task
+from isde.model import Assignment, Case, Clause, Observation, Option, Policy, Task
 
 EXAMPLES = Path(__file__).resolve().parents[1] / "examples"
 DAY = date(2026, 1, 7)
@@ -86,6 +86,8 @@ class RutDeliveryTests(unittest.TestCase):
             with self.subTest(i=i):
                 self.task((f"El dato de la persona es {value}.", []))
                 user = f"test_{i}"
+                self.case.assignments.append(Assignment(user=user, role="vendor", org=self.case.org,
+                                                        operation=self.case.operation, start=DAY))
                 self.assertEqual(self.deliver(user=user)["action"], "review")
                 self.assertEqual(self.guard.inbox(user), [])
 
