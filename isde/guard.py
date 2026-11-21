@@ -132,7 +132,7 @@ class Guard:
     def model_context(self, user, at):
         """Export only the ontology this model is allowed to see as of the source date."""
         if user is None:
-            private = internal_view(self.schema, (f for _, f, _ in self.records("", at)))
+            private = internal_view(self.schema, (f for _, f, _ in self.records("", at)), self.policy)
             triples = sorted((str(s).removeprefix(str(E)), str(p).removeprefix(str(P)),
                               str(o).removeprefix(str(E))) for s, p, o in private
                              if str(p).startswith(str(P)))
@@ -152,7 +152,7 @@ class Guard:
             raise ValueError(f"Tarea desconocida: {task_id}")
         task = self.case.tasks[task_id]
         private_facts = [fact for _, fact, _ in self.records("", at)]
-        private = internal_view(self.schema, private_facts)
+        private = internal_view(self.schema, private_facts, self.policy)
         records = self.records(user, at)
         rut_protection = RutProtection(private_facts, records)
         historical = self.hypotheses(user, at)

@@ -197,6 +197,7 @@ OBSERVER_ROLE = ("Adopta la perspectiva del destinatario de esta vista. Propón 
 def assess_hypotheses(policy, text, graph_context, *, client=None, model=None):
     context = {"familias": policy.model_dump()["families"], "vocabulario": policy.vocabulary,
                "reglas": [chain.model_dump() for chain in policy.chains],
+               "reglas_logicas": [rule.model_dump() for rule in policy.rules],
                "vista": observer_context(graph_context), "texto": text, "formato_numerico": rut_format_signals(text)}
     result = _request(OBSERVER_ROLE, context, Interpretations, client, model)
     for h in result.hypotheses:

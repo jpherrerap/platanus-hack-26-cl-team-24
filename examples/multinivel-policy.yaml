@@ -1,0 +1,21 @@
+version: 1
+evidence: {possible_access: 0.15, external_hint: 0.50, delivered: 0.75, read: 0.90, cited: 0.98}
+vocabulary:
+  a: Afirmación a.
+  b: Afirmación intermedia b.
+  c: Afirmación intermedia c.
+roles:
+  reader: {}
+families:
+  d:
+    description: La afirmación d es confidencial.
+    statuses: ["yes"]
+    absolute: 0.75
+    increase: 0.45
+rules:
+  - when: [["?x", a, "yes"]]
+    then: ["?x", b, "yes"]
+  - when: [["?x", b, "yes"]]
+    then: ["?x", c, "yes"]
+  - when: [["?x", c, "yes"]]
+    then: ["?x", d, "yes"]
