@@ -905,6 +905,126 @@ class SemanticApiTests(unittest.TestCase):
                      "question":"¿Cuándo vence el trámite?",
                      "text":"El plazo acaba el viernes. O-17 pertenece a BetaAI."}
 
+    def test_dashboard_persists_prompts_secrets_and_role_grants(self):
+        from fastapi.testclient import TestClient
+        from isde.api import create_app
+        page = self.client.get("/")
+        self.assertEqual(page.status_code, 200)
+        self.assertIn("Agentes y prompts", page.text)
+        self.assertIn("Secretos y acceso", page.text)
+        start = self.client.get("/v1/demo/config").json()
+        self.assertEqual(set(start["prompts"]), {"ontology", "adversary", "analyst", "rewriter"})
+        for agent in start["prompts"]:
+            result = self.client.put(f"/v1/demo/prompts/{agent}", json={"prompt": f"Prompt {agent}"})
+            self.assertEqual(result.status_code, 200)
+        self.assertEqual(self.client.put("/v1/demo/prompts/other", json={"prompt":"test"}).status_code, 400)
+        secret = {"description":"Secreto artificial", "statuses":["yes", "no"],
+                  "absolute":.8, "increase":.3, "allowed_roles":["vendor"]}
+        self.assertEqual(self.client.put("/v1/demo/secrets/artificial", json=secret).status_code, 200)
+        self.assertEqual(self.client.put("/v1/demo/secrets/artificial", json={**secret, "statuses":["no"]}).status_code, 400)
+        self.assertEqual(self.client.put("/v1/demo/secrets/bad-name", json=secret).status_code, 400)
+        self.assertEqual(self.client.put("/v1/demo/vocabulary/paso_intermedio", json={"description":"Paso"}).status_code, 200)
+        self.assertEqual(self.client.put("/v1/demo/vocabulary/artificial", json={"description":"Paso"}).status_code, 400)
+        restarted = TestClient(create_app(db=self.path, seed=False))
+        current = restarted.get("/v1/demo/config").json()
+        self.assertEqual(current["prompts"]["adversary"], "Prompt adversary")
+        self.assertEqual(current["families"]["artificial"]["statuses"], ["yes", "no"])
+        self.assertIn("artificial", current["grants"]["vendor"])
+        self.assertEqual(current["vocabulary"]["paso_intermedio"], "Paso")
+        self.assertNotIn("artificial", current["grants"]["legal"])
+
+    def test_freeform_question_reformulation_and_delivery_are_guarded(self):
+        data = {**self.data, "task":"freeform", "question":"¿Qué fecha corresponde?"}
+        self.assertEqual(self.client.post("/v1/reviews", json=data).json()["status"], "revise")
+        revision = {"user":"luis", "revision_id":"freeform-revision", "text":"El plazo acaba el viernes."}
+        self.assertEqual(self.client.post("/v1/reviews/rev-1/revisions", json=revision).json()["status"], "approved")
+        self.assertEqual(self.client.get("/v1/inbox/luis").json()["messages"], [])
+        delivery = self.client.post("/v1/reviews/rev-1/deliver", json={"user":"luis"}).json()
+        self.assertEqual(delivery, {"action":"repair", "text":"El plazo acaba el viernes."})
+        self.assertEqual(self.client.post("/v1/reviews", json={**data, "review_id":"blank", "question":"  "}).status_code, 400)
+        self.assertEqual(self.client.post("/v1/reviews", json={**data, "review_id":"unknown", "task":"missing"}).status_code, 400)
+
+    def test_prompt_or_secret_change_invalidates_approved_reviews(self):
+        for index, change in enumerate(("prompt", "secret")):
+            data = {**self.data, "review_id":f"stale-{index}", "user":"ana", "task":"freeform",
+                    "text":"El plazo acaba el viernes."}
+            self.assertEqual(self.client.post("/v1/reviews", json=data).json()["status"], "approved")
+            if change == "prompt":
+                response = self.client.put("/v1/demo/prompts/analyst", json={"prompt":"Nuevas instrucciones"})
+            else:
+                response = self.client.put("/v1/demo/secrets/nuevo", json={"description":"Dato protegido",
+                    "statuses":["yes"], "absolute":.75, "increase":.45, "allowed_roles":[]})
+            self.assertEqual(response.status_code, 200)
+            result = self.client.post(f"/v1/reviews/stale-{index}/deliver", json={"user":"ana"}).json()
+            self.assertEqual((result["action"], result["reason"]), ("review", "context_changed"))
+        self.assertEqual(self.client.get("/v1/inbox/ana").json()["messages"], [])
+
+    def test_dashboard_accepts_exact_preview_without_calling_model_again(self):
+        from fastapi.testclient import TestClient
+        from isde.api import create_app
+        class Model:
+            calls = 0
+            def source(self, policy, source, grade, context):
+                self.calls += 1
+                return [Observation(origin=source.origin, at=source.at, user=source.user, grade=grade,
+                                    facts=[SIGN], quote=source.text, confidence=.8 if source.user else None)]
+        model = Model()
+        client = TestClient(create_app(db=self.path, model=model, seed=False))
+        payload = {"origin":"dashboard_source", "at":DAY.isoformat(), "text":"O-17 firmado.", "recipients":["ana"]}
+        preview = client.post("/v1/demo/sources/preview", json=payload)
+        self.assertEqual(preview.status_code, 200)
+        self.assertEqual(model.calls, 2)
+        self.assertEqual(client.get("/v1/inbox/ana").json()["messages"], [])
+        preview_id = preview.json()["preview_id"]
+        result = client.post(f"/v1/demo/sources/{preview_id}/accept")
+        self.assertTrue(result.json()["accepted"])
+        self.assertEqual(model.calls, 2)
+        self.assertFalse(client.post(f"/v1/demo/sources/{preview_id}/accept").json()["accepted"])
+        self.assertEqual(model.calls, 2)
+        stale = client.post("/v1/demo/sources/preview", json={**payload,"origin":"stale_source"}).json()["preview_id"]
+        client.put("/v1/demo/prompts/ontology", json={"prompt":"Cambiado"})
+        self.assertEqual(client.post(f"/v1/demo/sources/{stale}/accept").status_code, 400)
+
+    def test_editing_agent_prompts_changes_live_model_instructions(self):
+        from fastapi.testclient import TestClient
+        from isde.api import create_app
+        from isde.claude import InternalSuggestions, Interpretations
+        from isde.semantic import CandidateFact, DraftAssessment
+        observed = []
+        def fake(role, context, schema, client, model):
+            observed.append(role)
+            if schema is InternalSuggestions:
+                return schema(items=[])
+            if schema is Interpretations:
+                return schema(hypotheses=[])
+            return DraftAssessment(facts=[CandidateFact(fact=("o17", "deadline", "friday"), quote="viernes")],
+                                   covers_all_claims=True, fulfills_task=True)
+        with mock.patch("isde.claude._request", side_effect=fake), mock.patch("isde.semantic._request", side_effect=fake):
+            client = TestClient(create_app(db=self.path, seed=False))
+            for agent in ("ontology", "adversary", "analyst"):
+                self.assertEqual(client.put(f"/v1/demo/prompts/{agent}", json={"prompt":f"CUSTOM {agent}"}).status_code, 200)
+            client.post("/v1/demo/sources/preview", json={"origin":"p", "at":DAY.isoformat(),"text":"texto"})
+            data = {**self.data, "task":"freeform", "user":"ana", "text":"El plazo acaba el viernes."}
+            self.assertEqual(client.post("/v1/reviews", json=data).status_code, 200)
+        for agent in ("ontology", "adversary", "analyst"):
+            self.assertTrue(any(f"CUSTOM {agent}" in role for role in observed), agent)
+
+    def test_rewriter_uses_configured_prompt_and_delivery_still_rechecks(self):
+        from isde.workflow import Rewrite
+        captured = []
+        def rewrite(role, context, schema, client, model):
+            captured.append(role)
+            return Rewrite(text=context["approved_alternative"])
+        self.client.put("/v1/demo/prompts/rewriter", json={"prompt":"CUSTOM rewriter"})
+        draft = "El trámite vence el viernes. El expediente O-17 corresponde a BetaAI."
+        with mock.patch("isde.workflow._request", side_effect=rewrite):
+            result = self.client.post("/v1/messages", json={"user":"luis", "task":"due", "draft":draft,
+                                                           "request_id":"rewrite-prompt", "day":DAY.isoformat()})
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.json()["action"], "repair")
+        self.assertEqual(captured, ["CUSTOM rewriter"])
+        self.assertNotIn("BetaAI", self.client.get("/v1/inbox/luis").json()["messages"][0]["text"])
+
     def test_external_agent_revises_then_delivers_exact_message(self):
         denied = self.client.post("/v1/reviews", json=self.data)
         self.assertEqual((denied.status_code, denied.json()["status"]), (200, "revise"))

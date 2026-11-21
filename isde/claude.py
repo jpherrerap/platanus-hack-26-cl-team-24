@@ -192,22 +192,23 @@ class Interpretations(Model):
 OBSERVER_ROLE = ADVERSARIAL_PROMPT
 
 
-def assess_hypotheses(policy, text, graph_context, *, client=None, model=None):
+def assess_hypotheses(policy, text, graph_context, *, client=None, model=None, prompt=None):
     context = {"familias": policy.model_dump()["families"], "vocabulario": policy.vocabulary,
                "reglas": [chain.model_dump() for chain in policy.chains],
                "reglas_logicas": [rule.model_dump() for rule in policy.rules],
                "vista": observer_context(graph_context), "texto": text, "formato_numerico": rut_format_signals(text)}
-    result = _request(OBSERVER_ROLE, context, Interpretations, client, model)
+    result = _request(OBSERVER_ROLE if prompt is None else prompt, context, Interpretations, client, model)
     for h in result.hypotheses:
         h.validate_source(policy, text)
     return result.hypotheses
 
 
-def propose(policy: Policy, source: Source, grade: Grade | None = None, *, graph_context=None, client=None, model=None):
+def propose(policy: Policy, source: Source, grade: Grade | None = None, *, graph_context=None, client=None, model=None,
+            internal_prompt=None, adversarial_prompt=None):
     """Discover new entities and facts from one supplied text; returned proposals await acceptance."""
     if (source.user is None) != (grade is None):
         raise ValueError("Una fuente externa requiere un grado")
-    role = INTERNAL_ONTOLOGY_PROMPT
+    role = INTERNAL_ONTOLOGY_PROMPT if internal_prompt is None else internal_prompt
     context = {"policy": policy.model_dump(), "ontology": graph_context, "text": source.text,
                "grade": grade, "resource": source.resource}
     schema = InternalSuggestions
@@ -215,7 +216,8 @@ def propose(policy: Policy, source: Source, grade: Grade | None = None, *, graph
         context["ontology"] = observer_context(graph_context)
         context["formato_numerico"] = rut_format_signals(source.text)
         role = "Extrae en items únicamente triples explícitos de esta fuente. "
-        role += "En items, confidence estima que el observador conozca la afirmación explícita. " + OBSERVER_ROLE
+        role += "En items, confidence estima que el observador conozca la afirmación explícita. "
+        role += OBSERVER_ROLE if adversarial_prompt is None else adversarial_prompt
         schema = ObserverSuggestions
     result = _request(role + " Usa identificadores canónicos en minúsculas y predicados del vocabulario "
                       "o familias. Conserva los estados definidos. Devuelve una cita literal por triple.",

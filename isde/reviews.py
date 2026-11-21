@@ -18,8 +18,10 @@ def encode(value):
 def review(guard, model, review_id, user, task, day, text, question, *, revision=False, revision_id=None):
     if user not in {a.user for a in guard.case.assignments if (a.org, a.operation) == guard.scope}:
         raise ValueError("Destinatario fuera del directorio")
-    if not revision and task not in guard.case.tasks:
+    if not revision and task != "freeform" and task not in guard.case.tasks:
         raise ValueError("Tarea desconocida")
+    if not revision and task == "freeform" and not question.strip():
+        raise ValueError("La tarea libre requiere una pregunta")
     original_hash = hashlib.sha256(encode([user, task, day.isoformat(), text, question]).encode()).hexdigest()
     with guard.transaction():
         previous = guard.db.execute(
