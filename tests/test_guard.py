@@ -188,7 +188,7 @@ class ServeTests(unittest.TestCase):
         self.g = Guard(":memory:", Policy.load(ROOT / "policy.yaml"), Case.load(ROOT / "case.yaml"))
         self.addCleanup(self.g.close)
         self.g.observe(Batch.load(ROOT / "history.yaml").observations)
-        self.get = lambda path: respond(self.g, path)
+        self.get = lambda path, host="127.0.0.1:8000": respond(self.g, path, host)
 
     def test_page_and_preview_without_delivery(self):
         status, kind, page, nonce = self.get("/")
@@ -202,10 +202,17 @@ class ServeTests(unittest.TestCase):
         self.assertEqual(self.g.inbox("luis"), [])
 
     def test_boundary_validation_and_escaping(self):
+        from isde.serve import serve
         self.assertEqual(self.get("/api/preview?user=mallory&task=due")[:3:2], (400, {"error": "Destinatario desconocido"}))
         self.assertEqual(self.get("/api/preview?user=ana&task=x")[0], 400)
         self.assertEqual(self.get("/api/preview?user=ana&task=due&draft=" + "a" * 2001)[0], 400)
         self.assertEqual(self.get("/nada")[0], 404)
+        # DNS rebinding: a foreign hostname resolving to loopback must not read the operator trace.
+        for host in ("evil.example:8000", "", "127.0.0.1.evil.example", "localhost@evil.example"):
+            self.assertEqual(self.get("/api/preview?user=luis&task=due", host)[0], 403, host)
+        self.assertEqual(self.get("/", "localhost:8000")[0], 200)
+        with self.assertRaises(ValueError):
+            serve(self.g.policy, self.g.case, ROOT / "history.yaml", 70000)
         self.g.case.tasks["<script>"] = self.g.case.tasks["due"]
         self.assertNotIn("<script>", self.get("/")[2].split("<option")[-1])
         _, _, body, _ = self.get("/api/preview?user=ana&task=due&draft=%3Cb%3Ehola")

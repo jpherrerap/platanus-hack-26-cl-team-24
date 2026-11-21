@@ -94,8 +94,11 @@ evaluate(false);
 </script></body></html>"""
 
 
-def respond(guard: Guard, path: str):
+def respond(guard: Guard, path: str, host: str):
     """Return (status, content_type, body, nonce) so tests can exercise routing without sockets."""
+    # A DNS-rebinding page reaches 127.0.0.1 under its own hostname; refusing foreign Hosts keeps the operator trace local.
+    if urlsplit("//" + host).hostname not in {"127.0.0.1", "localhost"}:
+        return 403, "application/json", {"error": "Host no permitido"}, None
     url = urlsplit(path)
     if url.path == "/":
         nonce = secrets.token_urlsafe(16)
@@ -125,12 +128,14 @@ def respond(guard: Guard, path: str):
 
 
 def serve(policy, case, history, port=8000):
+    if not 0 < port < 65536:
+        raise ValueError(f"Puerto inválido: {port}")
     guard = Guard(":memory:", policy, case)
     guard.observe(Batch.load(history).observations)
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
-            status, kind, body, nonce = respond(guard, self.path)
+            status, kind, body, nonce = respond(guard, self.path, self.headers.get("Host", ""))
             data = (body if isinstance(body, str) else json.dumps(body, ensure_ascii=False)).encode()
             self.send_response(status)
             self.send_header("Content-Type", kind)
@@ -142,7 +147,7 @@ def serve(policy, case, history, port=8000):
             self.end_headers()
             self.wfile.write(data)
 
-    # shortcut: single-threaded server on loopback without a Host check, fine for a local pitch; add one before exposing it.
+    # shortcut: single-threaded server on loopback, fine for a local pitch; add auth before exposing it.
     server = HTTPServer(("127.0.0.1", port), Handler)
     print(f"ISDE demo en http://127.0.0.1:{port}/ (Ctrl+C para salir)")
     try:
