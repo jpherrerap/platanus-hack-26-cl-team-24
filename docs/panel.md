@@ -12,6 +12,15 @@ Abre http://127.0.0.1:8001/. En vez del llavero también puedes configurar `ANTH
 
 La configuración inicial del panel usa `mvp-policy.yaml`, `mvp-case.yaml` y `mvp-history.yaml`: no tiene secretos de un caso empresarial predefinido y contiene dos destinatarios ficticios, `usuario_demo` y `revisor_demo`. Los destinatarios y roles se definen en YAML; el panel aún no crea ni autentica usuarios reales.
 
+## Pestañas
+
+- **Simulación:** reúne la entrada de fuentes y la evaluación de salidas. Los escenarios de correos, código e informes completan formularios con datos ficticios. Las llamadas de análisis usan la API de mosAIc; no se envían correos, no se publican repositorios y no hay aislamiento de procesos.
+- **Configuración:** conserva los prompts, secretos, roles autorizados y conceptos del panel anterior.
+- **Notificaciones:** muestra bloqueos y señales de las evaluaciones registradas, sin alertas ficticias precargadas. Un borrador retenido por riesgo genera «Se bloqueó una posible filtración de información». Una extracción incompleta o una fuente sin cobertura genera una señal de revisión distinta.
+- **Elementos marcados:** permite filtrar los registros pendientes, revisados o descartados. Revisar o descartar una alerta solo actualiza el registro: no aprueba el borrador ni ejecuta una entrega.
+
+Los contadores provienen de los registros persistidos, por organización y operación. Las listas no contienen textos evaluados, citas ni logs privados. Para abrir la evidencia o registrar una revisión, inicia la API con `MOSAIC_OPERATOR_TOKEN` y escríbelo en «Acceso de operador» en la cabecera. Se conserva solo en la página. Los detalles incluyen las salidas estructuradas del analista y del adversario, hipótesis, citas y cálculos de riesgo disponibles; no son el razonamiento interno del proveedor. Las evaluaciones repetidas con el mismo identificador no duplican la notificación de un mismo borrador.
+
 ## Agentes
 
 En «Agentes y prompts» elige y edita la instrucción del constructor de ontología, analista adversarial, analista de respuestas o reformulador de catálogo. Puedes restaurar los textos iniciales. El modelo Claude se selecciona de forma global con `MOSAIC_CLAUDE_MODEL`; los prompts son independientes por agente. La política se entrega como contexto a los agentes de análisis. El reformulador de `/v1/messages` recibe una alternativa de catálogo que el motor ya encontró admisible. En la revisión de texto libre, un agente externo o el operador aporta la reformulación.
@@ -26,18 +35,18 @@ Incluso sin familias configuradas, la API semántica pide al analista adversaria
 
 Este análisis genérico es probabilístico y puede omitir información sensible o generar falsos positivos; no garantiza confidencialidad. No se asignan permisos por rol a la categoría genérica, por lo que también puede retener un dato que una política específica permitiría. El flujo de catálogo y la demo antigua no invocan este análisis por defecto; la API semántica sí lo hace y ante un fallo no aprueba la entrega.
 
-Los conceptos ordinarios para hechos y reglas intermedias se agregan en «Conceptos y relaciones». Las conclusiones protegidas van en «Secretos y acceso». El modelo solo puede proponer hechos y reglas expresables con el vocabulario y las familias de la política; no descubre automáticamente un vocabulario ilimitado ni crea permisos.
+Los conceptos ordinarios para hechos y reglas intermedias se pueden agregar en «Conceptos y relaciones». Al analizar una fuente interna, Claude también puede proponer conceptos nuevos con descripción y cita, junto con los hechos o reglas que los usan. Las conclusiones protegidas van en «Secretos y acceso»: un concepto nuevo no se convierte automáticamente en un secreto configurado y el modelo no crea roles ni permisos.
 
 ## Construir y probar
 
 1. En «Conocimiento y fuentes», elige un identificador nuevo, fecha, texto y, opcionalmente, los destinatarios que recibieron esa fuente.
-2. Pulsa «Analizar fuente» y revisa las propuestas, sus citas y estimaciones. «Incorporar propuestas» guarda **exactamente** lo mostrado, sin una segunda llamada a Claude. Si el contexto cambia entre ambos pasos, hay que volver a analizar.
+2. Pulsa «Analizar fuente» y revisa los conceptos, hechos, reglas e hipótesis propuestos, sus citas y estimaciones. Cuando un análisis vuelve vacío o con una cita o predicado inválido, mosAIc hace hasta un segundo intento con Claude; esto puede generar llamadas adicionales. «Incorporar propuestas» guarda **exactamente** lo mostrado, sin otra llamada a Claude. Si no se extrae nada o no se representa ninguna pista para un destinatario seleccionado, no se habilita la incorporación ni se consume el identificador de la fuente; puedes reintentar o cambiar los destinatarios. Si el contexto cambia entre ambos pasos, hay que volver a analizar.
 3. En «Probar una respuesta», selecciona el destinatario y escribe una tarea y un borrador. «Evaluar respuesta» revisa si satisface la tarea y si podría revelar conclusiones protegidas.
 4. Si pide reformulación, cambia el texto y vuelve a evaluarlo. Si se aprueba, «Confirmar entrega» vuelve a verificar el contexto y actualiza la bandeja local.
 
-Para ver las hipótesis y la traza privada en la página, inicia la API con `MOSAIC_OPERATOR_TOKEN` definido y escribe el mismo token en «Ver análisis privado». El token no se guarda en el panel. Los destinatarios no reciben la traza.
+Para ver las hipótesis y la traza privada de la respuesta actual, usa «Evidencia de esta evaluación» después de introducir el token en «Acceso de operador». Los destinatarios no reciben la traza.
 
-La tarea y el texto son libres, pero la extracción debe poder representarse con la política y los hechos deben estar respaldados en la ontología interna. Las reglas propuestas por el modelo se usan de manera conservadora en el cálculo de riesgo y no verifican por sí solas como verdaderas las respuestas. Las estimaciones no están calibradas. La validación de citas y sintaxis no demuestra que las inferencias de Claude sean correctas o completas.
+La tarea y el texto son libres, pero la extracción debe poder representarse con la política y los conceptos aceptados, y los hechos deben estar respaldados en la ontología interna. Los conceptos propuestos se guardan con origen, fecha, cita, confianza y modelo. Si un concepto nuevo aparece en una fuente recibida por alguien, el análisis de ese destinatario usa un alias vinculado a una cita literal visible; no recibe el nombre ni la descripción del concepto aprendidos en el grafo privado. mosAIc vuelve a traducir el alias internamente. Las reglas propuestas por el modelo se usan de manera conservadora en el cálculo de riesgo y no verifican por sí solas como verdaderas las respuestas. Las estimaciones no están calibradas. La validación de citas y sintaxis no demuestra que las inferencias de Claude sean correctas o completas.
 
 Los cambios de prompts, secretos, vocabulario y permisos se guardan en SQLite, por organización y operación. Tras editar la configuración, las revisiones aprobadas anteriormente se deben evaluar de nuevo. La base se controla con `MOSAIC_API_DB` (por defecto `mosaic-api.sqlite`); una configuración ya guardada para el mismo ámbito tiene prioridad sobre el YAML inicial. Los ámbitos guardados antes no se borran. Los destinatarios y roles siguen viniendo del archivo de caso y política. La página no controla agentes externos ni envía correos reales.
 

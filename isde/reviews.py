@@ -9,6 +9,7 @@ from langgraph.graph import END, START, StateGraph
 from .model import Hypothesis
 from .semantic import DraftAssessment, inspect_graph, score_candidate
 from .claude import model_id
+from . import events
 
 
 def encode(value):
@@ -78,6 +79,8 @@ def review(guard, model, review_id, user, task, day, text, question, *, revision
             guard.db.execute("INSERT INTO semantic_revisions VALUES (?,?,?,?,?,?)",
                              (*guard.scope, review_id, revision_id, hashlib.sha256(text.encode()).hexdigest(),
                               encode(response)))
+        events.review_event(guard, review_id, number, user, text, question,
+                            state["analysis"], state["hypotheses"], state["result"])
     return response
 
 
@@ -105,6 +108,9 @@ def deliver(guard, review_id, user):
         if encode(context) != row[7]:
             guard.db.execute("UPDATE semantic_reviews SET status='review' WHERE org=? AND op=? AND review_id=?",
                              (*guard.scope, review_id))
+            events.record(guard, "flagged", "Una entrega necesita reevaluación", "delivery", review_id,
+                          {"reason": "context_changed", "review_id": review_id, "recipient": user,
+                           "notice": "No se entregó la respuesta porque cambió el contexto."})
             return {"action": "review", "text": None, "reason": "context_changed"}
         state = {"user": user, "task": row[1], "day": day, "text": row[4],
                  "analysis": DraftAssessment.model_validate_json(row[5]),

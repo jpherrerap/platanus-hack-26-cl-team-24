@@ -170,12 +170,14 @@ def main(argv=None):
         elif args.command == "propose":
             from .claude import Source, propose
             source = Source.load(args.file)
-            events = propose(policy, source, args.grade, graph_context=guard.model_context(source.user, source.at))
+            visible = guard.policy_at(source.at) if source.user is None else guard.recipient_policy(source.user, source.at)
+            events = propose(visible, source, args.grade, graph_context=guard.model_context(source.user, source.at))
             show(Batch(observations=events).model_dump(mode="json", exclude_none=True))
         elif args.command == "interpret":
             from .claude import Card, interpret
             card = Card.load(args.file)
-            events = interpret(policy, card, args.grade, graph_context=guard.model_context(card.user, card.at))
+            visible = guard.policy_at(card.at) if card.user is None else guard.recipient_policy(card.user, card.at)
+            events = interpret(visible, card, args.grade, graph_context=guard.model_context(card.user, card.at))
             guard.observe(events)
             show({"selected": len(events)})
         elif args.command == "inbox":

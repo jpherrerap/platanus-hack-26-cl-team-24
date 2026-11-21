@@ -39,7 +39,7 @@ La salida actual son hipótesis con un triple del vocabulario de la política, u
 
 ## Construcción progresiva desde fuentes
 
-El prompt interno en `isde/prompts.py` pide hechos explícitos y propone reglas expresadas en la fuente. Cada regla contiene `when`, `then`, una cita literal y una confianza de extracción. El validador exige variables ligadas, predicados existentes, estados válidos, identificadores seguros y una cita que aparezca en la fuente. No interpreta código Prolog entregado por el modelo. Estas verificaciones no prueban que la regla capture correctamente el significado de la cita.
+El prompt interno en `isde/prompts.py` pide hechos explícitos y propone reglas expresadas en la fuente. También puede proponer conceptos nuevos vinculados a esos hechos o reglas, con una descripción general y una cita de la fuente. Cada regla contiene `when`, `then`, una cita literal y una confianza de extracción. El validador exige variables ligadas, predicados existentes o propuestos en el mismo lote, estados válidos, identificadores seguros y una cita que aparezca en la fuente. No interpreta código Prolog entregado por el modelo. Estas verificaciones no prueban que la regla capture correctamente el significado de la cita.
 
 Las propuestas se muestran antes de aceptarlas, junto con su fuente, fecha, cita, confianza y modelo. Una fuente aceptada registra todo el lote en una transacción. Para evaluar el riesgo, mosAIc considera conservadoramente que el destinatario **podría** conocer las reglas propuestas, aun cuando no tenga una evidencia específica de conocerlas. Las añade al razonamiento formal con peso 1; la confianza del modelo queda registrada como metadato y **no** se multiplica por la probabilidad de conocimiento. El cálculo de ProbLog mantiene las probabilidades de acceso a las pistas, sujetas a esta suposición conservadora.
 
@@ -55,7 +55,7 @@ mosaic --policy examples/multinivel-dinamico-policy.yaml --case examples/multini
 mosaic --policy examples/multinivel-dinamico-policy.yaml --case examples/multinivel-case.yaml --db dinamico.sqlite preview ana show_a --at 2026-01-01 --draft a
 ```
 
-Si Claude identifica las tres reglas en la fuente, el último comando deja `a` en revisión porque conduce a `d`. La extracción puede variar: revisa `propuestas.json` antes de cargarlo. La API `/v1/sources` también permite obtener propuestas con `accept: false` e incorporarlas con `accept: true`; cada llamada analiza nuevamente la fuente. El vocabulario y las familias deben existir en la política; todavía no se incorporan predicados ni categorías sensibles nuevas automáticamente. La detección de conocimientos sin relación con el texto analizado y la explicación completa de cada cadena siguen pendientes.
+Si Claude identifica las tres reglas en la fuente, el último comando deja `a` en revisión porque conduce a `d`. La extracción puede variar: revisa `propuestas.json` antes de cargarlo. La API `/v1/sources` también permite obtener propuestas con `accept: false` e incorporarlas con `accept: true`; cada llamada analiza nuevamente la fuente. Los conceptos nuevos aceptados amplían el vocabulario; las categorías protegidas se configuran aparte. La detección de conocimientos sin relación con el texto analizado y la explicación completa de cada cadena siguen pendientes.
 
 ## Ejecutar las pruebas
 

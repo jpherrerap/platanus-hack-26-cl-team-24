@@ -25,6 +25,312 @@ LINK = ("o17", "counterparty", "betaai")
 GOAL = ("betaai", "offer_status", "signed")
 
 
+class DynamicVocabularyTests(unittest.TestCase):
+    def setUp(self):
+        self.policy = Policy.load(ROOT / "mvp-policy.yaml")
+        self.case = Case.load(ROOT / "mvp-case.yaml")
+        self.source_text = "Hola, mi direccion es Roble 10."
+        self.source = Source(origin="correo_01", at=DAY, text=self.source_text)
+        self.fact = ("remitente_correo_01", "domicilio", "roble_10")
+        self.concept = {"predicate":"domicilio", "description":"Relación con una dirección residencial",
+                        "quote":"direccion", "confidence":.9}
+
+    def test_new_concept_and_fact_are_proposed_with_literal_evidence_after_retry(self):
+        calls = []
+        def create(**request):
+            calls.append(request)
+            payload = {"items": []} if len(calls) == 1 else {
+                "vocabulary":[self.concept], "items":[{"fact":self.fact,
+                    "quote":"mi direccion es Roble 10", "confidence":.9}]}
+            return SimpleNamespace(content=[SimpleNamespace(type="tool_use", name="select_evidence", input=payload)],
+                                   stop_reason="tool_use")
+        client = SimpleNamespace(messages=SimpleNamespace(create=create))
+        events = propose(self.policy, self.source, client=client)
+        self.assertEqual(len(calls), 2)
+        self.assertIn("predicado", calls[1]["system"])
+        model_context = json.loads(calls[0]["messages"][0]["content"])
+        self.assertNotEqual(model_context["source_id"], self.source.origin)
+        self.assertTrue(model_context["source_id"].startswith("fuente_"))
+        self.assertEqual(events[0].vocabulary[0].predicate, "domicilio")
+        self.assertEqual(events[1].facts, [self.fact])
+        guard = Guard(":memory:", self.policy, self.case)
+        self.addCleanup(guard.close)
+        self.assertTrue(guard.observe(events, source_id="correo_01", source_digest="digest"))
+        self.assertFalse(guard.observe(events, source_id="correo_01", source_digest="digest"))
+        self.assertEqual(guard.policy_at(DAY).vocabulary["domicilio"], self.concept["description"])
+        self.assertIn(self.fact, guard.model_context(None, DAY)["facts"])
+        self.assertNotIn("domicilio", guard.policy_at(date(2026, 1, 3)).vocabulary)
+        self.assertNotIn("domicilio", guard.recipient_policy("usuario_demo", DAY).vocabulary)
+        permitted = guard.recipient_policy("usuario_demo", DAY)
+        self.assertNotIn("domicilio", permitted.vocabulary)
+        self.assertNotIn(self.concept["description"], str(permitted.vocabulary))
+
+    def test_missing_predicate_or_inexact_quote_gets_one_repair_attempt(self):
+        calls = []
+        def create(**request):
+            calls.append(request)
+            if len(calls) == 1:
+                payload = {"items":[{"fact":self.fact, "quote":"MI DIRECCION", "confidence":.8}]}
+            else:
+                payload = {"vocabulary":[self.concept], "items":[{"fact":self.fact,
+                          "quote":"mi direccion es Roble 10", "confidence":.9}]}
+            return SimpleNamespace(content=[SimpleNamespace(type="tool_use", name="select_evidence", input=payload)],
+                                   stop_reason="tool_use")
+        client = SimpleNamespace(messages=SimpleNamespace(create=create))
+        events = propose(self.policy, self.source, client=client)
+        self.assertEqual(len(calls), 2)
+        self.assertIn("cita debe ser una copia literal", calls[1]["system"])
+        self.assertEqual(events[1].facts, [self.fact])
+
+    def test_recipient_retries_with_offered_visible_alias(self):
+        policy = self.policy.model_copy(update={"vocabulary":{**self.policy.vocabulary,
+                                        "relacion_fuente_1":"Relación del fragmento visible"}})
+        source = Source(origin="correo_01", at=DAY, text=self.source_text, user="usuario_demo")
+        calls = []
+        def create(**request):
+            calls.append(request)
+            predicate = "domicilio" if len(calls) == 1 else "relacion_fuente_1"
+            payload = {"items":[{"fact":[self.fact[0],predicate,self.fact[2]],
+                                  "quote":"mi direccion es Roble 10", "confidence":.9}]}
+            return SimpleNamespace(content=[SimpleNamespace(type="tool_use", name="select_evidence", input=payload)],
+                                   stop_reason="tool_use")
+        client = SimpleNamespace(messages=SimpleNamespace(create=create))
+        events = propose(policy, source, "delivered", client=client)
+        self.assertEqual(len(calls), 2)
+        self.assertIn("predicados disponibles", calls[1]["system"])
+        self.assertEqual(events[0].facts[0][1], "relacion_fuente_1")
+
+    def test_invalid_new_concepts_and_late_failure_leave_no_partial_changes(self):
+        guard = Guard(":memory:", self.policy, self.case)
+        self.addCleanup(guard.close)
+        from isde.model import VocabularyProposal
+        from pydantic import ValidationError
+        for update in [{"predicate":"bad-name"}, {"predicate":"intrinsic_sensitivity"}, {"quote":"inventada"}]:
+            with self.subTest(update=update), self.assertRaises((ValueError, ValidationError)):
+                proposal = VocabularyProposal.model_validate({**self.concept, **update})
+                proposal.validate_source(self.source_text)
+        good = Observation(origin="correo_01", at=DAY, quote=self.source_text, vocabulary=[self.concept])
+        bad = Observation(origin="correo_01", at=DAY, quote=self.source_text,
+                          facts=[("p", "predicado_inexistente", "x")])
+        with self.assertRaises(ValueError):
+            guard.observe([good, bad], source_id="correo_01", source_digest="digest")
+        self.assertEqual(guard.proposed_vocabulary(DAY), [])
+        self.assertEqual(guard.db.execute("SELECT count(*) FROM source_imports").fetchone()[0], 0)
+
+    @unittest.skipUnless(importlib.util.find_spec("langgraph"), "Instala el extra api")
+    def test_new_concepts_can_connect_multiple_discovered_rules(self):
+        from isde.semantic import SourceInput, source_graph
+        data = self.policy.model_dump()
+        data["families"] = {"d":{"description":"Conclusión protegida", "statuses":["yes"],
+                                   "absolute":.75, "increase":.45}}
+        policy = Policy.model_validate(data)
+        text = "P tiene a. Todo a implica b. Todo b implica d."
+        payload = {"vocabulary":[{"predicate":"a", "description":"Propiedad a", "quote":"a", "confidence":.9},
+                                 {"predicate":"b", "description":"Propiedad b", "quote":"b", "confidence":.9}],
+                   "items":[{"fact":["p","a","yes"], "quote":"P tiene a.", "confidence":.9}],
+                   "rules":[{"rule":{"when":[["?x","a","yes"]], "then":["?x","b","yes"]},
+                             "quote":"Todo a implica b.", "confidence":.9},
+                            {"rule":{"when":[["?x","b","yes"]], "then":["?x","d","yes"]},
+                             "quote":"Todo b implica d.", "confidence":.9}]}
+        block = SimpleNamespace(type="tool_use", name="select_evidence", input=payload)
+        client = SimpleNamespace(messages=SimpleNamespace(create=lambda **_: SimpleNamespace(content=[block], stop_reason="tool_use")))
+        source = Source(origin="reglas", at=DAY, text=text)
+        events = propose(policy, source, client=client)
+        case = self.case.model_copy(deep=True)
+        case.clauses = {"a":Clause(text="P tiene a.", facts=[("p","a","yes")], provides=["answer"])}
+        case.tasks = {"show":Task(requires=["answer"], options=[Option(clauses=["a"])])}
+        guard = Guard(":memory:", policy, case)
+        self.addCleanup(guard.close)
+        class Model:
+            def source(self, policy, source, grade, context):
+                return events
+        result = source_graph(guard, Model()).invoke({"source":SourceInput(origin="reglas",at=DAY,text=text),
+                                                     "accept":True,"digest":"one"})
+        self.assertTrue(result["accepted"])
+        self.assertEqual(len(guard.proposed_rules(DAY)), 2)
+        outcome = guard.run("usuario_demo", "show", DAY, draft="P tiene a.", strict=True)
+        self.assertEqual(outcome["action"], "review")
+        self.assertEqual(outcome["attempts"][0]["blocked"][0]["family"], "d")
+
+    @unittest.skipUnless(all(importlib.util.find_spec(n) for n in ("fastapi", "langgraph", "httpx")),
+                         "Instala el extra api")
+    def test_dashboard_adds_concept_and_recipient_knowledge_then_checks_reply(self):
+        from fastapi.testclient import TestClient
+        from isde.api import create_app
+        from isde.claude import InternalSuggestions, Interpretations, ObserverSuggestions
+        from isde.semantic import CandidateFact, DraftAssessment
+        observed = []
+        def fake(role, context, schema, client, model):
+            observed.append((schema.__name__, context))
+            if schema is InternalSuggestions:
+                return schema(vocabulary=[self.concept], items=[{"fact":self.fact,
+                              "quote":"mi direccion es Roble 10", "confidence":.9}])
+            if schema is ObserverSuggestions:
+                self.assertNotIn(self.concept["description"], str(context["policy"]["vocabulary"]))
+                self.assertNotIn("domicilio", context["policy"]["vocabulary"])
+                self.assertIn("relacion_fuente_1", context["policy"]["vocabulary"])
+                return schema(items=[{"fact":[self.fact[0],"relacion_fuente_1",self.fact[2]],
+                                      "quote":"mi direccion es Roble 10", "confidence":.9}])
+            if schema is DraftAssessment:
+                return schema(facts=[CandidateFact(fact=self.fact, quote="Roble 10")],
+                              covers_all_claims=True, fulfills_task=True)
+            if schema is Interpretations:
+                self.assertNotIn(self.concept["description"], str(context["vocabulario"]))
+                self.assertNotIn("domicilio", context["vocabulario"])
+                return schema(hypotheses=[Hypothesis(claim=("remitente_correo_01","intrinsic_sensitivity","domicilio"),
+                                                     quote="Roble 10", p_if_seen=.9)])
+            self.fail(f"Esquema inesperado: {schema}")
+        with tempfile.TemporaryDirectory() as folder, mock.patch.dict(os.environ, {}, clear=True), \
+             mock.patch("isde.claude._request", side_effect=fake), mock.patch("isde.semantic._request", side_effect=fake):
+            path = str(Path(folder) / "data.sqlite")
+            client = TestClient(create_app(db=path))
+            body = {"origin":"correo_01", "at":DAY.isoformat(), "text":self.source_text,
+                    "recipients":["usuario_demo"]}
+            preview = client.post("/v1/demo/sources/preview", json=body)
+            self.assertEqual(preview.status_code, 200, preview.text)
+            proposal = preview.json()
+            self.assertEqual(proposal["observations"][0]["vocabulary"][0]["predicate"], "domicilio")
+            before = Guard(path, self.policy, self.case)
+            try:
+                self.assertEqual(before.proposed_vocabulary(DAY), [])
+            finally:
+                before.close()
+            accepted = client.post(f"/v1/demo/sources/{proposal['preview_id']}/accept")
+            self.assertEqual(accepted.status_code, 200, accepted.text)
+            self.assertTrue(accepted.json()["accepted"])
+            self.assertIn("domicilio", client.get("/v1/demo/config").json()["vocabulary"])
+            guard = Guard(path, self.policy, self.case)
+            try:
+                self.assertIn(self.fact, guard.model_context(None, DAY)["facts"])
+                self.assertEqual([tuple(h["fact"]) for h in guard.model_context("usuario_demo",DAY)["possible_knowledge"]],
+                                 [self.fact])
+                self.assertEqual(guard.model_context("revisor_demo",DAY)["possible_knowledge"], [])
+                self.assertNotIn("domicilio", guard.recipient_policy("revisor_demo",DAY).vocabulary)
+            finally:
+                guard.close()
+            draft = {"review_id":"r1", "user":"revisor_demo", "task":"freeform", "day":DAY.isoformat(),
+                     "question":"¿Dónde vive?", "text":"Vive en Roble 10."}
+            result = client.post("/v1/reviews", json=draft)
+            self.assertEqual(result.status_code, 200, result.text)
+            self.assertEqual(result.json()["status"], "revise")
+            self.assertEqual(client.get("/v1/inbox/revisor_demo").json()["messages"], [])
+            self.assertEqual([name for name, _ in observed],
+                             ["InternalSuggestions", "ObserverSuggestions", "DraftAssessment", "Interpretations"])
+            self.assertEqual(observed[0][1]["source_id"], observed[1][1]["source_id"])
+            self.assertNotEqual(observed[1][1]["source_id"], "correo_01")
+
+    @unittest.skipUnless(importlib.util.find_spec("langgraph"), "Instala el extra api")
+    def test_recipient_model_never_receives_private_concept_name_or_description(self):
+        from isde.semantic import SourceInput, source_graph
+        guard = Guard(":memory:", self.policy, self.case)
+        self.addCleanup(guard.close)
+        private = {"predicate":"diagnostico_privado", "description":"detalle_medico_reservado",
+                   "quote":"control", "confidence":.8}
+        guard.observe([Observation(origin="privado", at=DAY, quote="control", vocabulary=[private]),
+                       Observation(origin="privado", at=DAY, quote="control",
+                                   facts=[("p","diagnostico_privado","dato")])])
+        class Model:
+            def source(inner, policy, source, grade, context):
+                if source.user is None:
+                    return [Observation(origin=source.origin, at=source.at, quote="control",
+                                        facts=[("p","diagnostico_privado","dato")])]
+                serialized = str(policy.model_dump()) + str(context)
+                self.assertNotIn("diagnostico_privado", serialized)
+                self.assertNotIn("detalle_medico_reservado", serialized)
+                self.assertIn("relacion_fuente_1", policy.vocabulary)
+                return []
+        result = source_graph(guard, Model()).invoke({"source":SourceInput(origin="publico", at=DAY,
+                    text="control", recipients=["usuario_demo"]), "accept":False, "digest":"x"})
+        self.assertEqual(result["external"], [])
+
+    @unittest.skipUnless(importlib.util.find_spec("langgraph"), "Instala el extra api")
+    def test_source_alias_does_not_collide_with_existing_predicates(self):
+        from isde.semantic import SourceInput, source_graph
+        data = self.policy.model_dump()
+        data["vocabulary"]["relacion_fuente_1"] = "Predicado configurado"
+        policy = Policy.model_validate(data)
+        guard = Guard(":memory:", policy, self.case)
+        self.addCleanup(guard.close)
+        class Model:
+            def source(inner, policy, source, grade, context):
+                if source.user is None:
+                    return [Observation(origin=source.origin, at=DAY, quote=source.text, vocabulary=[self.concept]),
+                            Observation(origin=source.origin, at=DAY, quote="mi direccion es Roble 10", facts=[self.fact])]
+                self.assertEqual(policy.vocabulary["relacion_fuente_1"], "Predicado configurado")
+                self.assertIn("relacion_fuente_2", policy.vocabulary)
+                return []
+        source_graph(guard, Model()).invoke({"source":SourceInput(origin="correo_01", at=DAY,
+            text=self.source_text, recipients=["usuario_demo"]), "accept":False, "digest":"x"})
+
+    @unittest.skipUnless(all(importlib.util.find_spec(n) for n in ("fastapi", "langgraph", "httpx")),
+                         "Instala el extra api")
+    def test_empty_preview_cannot_be_accepted_or_consume_source_id(self):
+        import hashlib
+        from fastapi.testclient import TestClient
+        from isde.api import create_app
+        from isde.semantic import SourceInput
+        class Model:
+            ready = False
+            def source(inner, policy, source, grade, context):
+                if not inner.ready:
+                    return []
+                return [Observation(origin=source.origin, at=source.at, quote=source.text,
+                                    vocabulary=[self.concept]),
+                        Observation(origin=source.origin, at=source.at, quote="mi direccion es Roble 10",
+                                    facts=[self.fact])]
+        model = Model()
+        with tempfile.TemporaryDirectory() as folder, mock.patch.dict(os.environ, {}, clear=True):
+            path = str(Path(folder) / "data.sqlite")
+            client = TestClient(create_app(db=path, model=model))
+            body = {"origin":"correo_01", "at":DAY.isoformat(), "text":self.source_text, "recipients":[]}
+            preview = client.post("/v1/demo/sources/preview", json=body).json()
+            self.assertIsNone(preview["preview_id"])
+            self.assertEqual(preview["observations"], [])
+            self.assertFalse(client.post("/v1/sources", json={**body, "accept":True}).json()["accepted"])
+            guard = Guard(path, self.policy, self.case)
+            try:
+                self.assertEqual(guard.db.execute("SELECT count(*) FROM source_imports").fetchone()[0], 0)
+                digest = hashlib.sha256(SourceInput.model_validate(body).model_dump_json().encode()).hexdigest()
+                guard.db.execute("INSERT INTO source_imports VALUES (?,?,?,?)", (*guard.scope, "correo_01", digest))
+            finally:
+                guard.close()
+            model.ready = True
+            retry = client.post("/v1/demo/sources/preview", json=body).json()
+            self.assertTrue(client.post(f"/v1/demo/sources/{retry['preview_id']}/accept").json()["accepted"])
+            self.assertFalse(client.post(f"/v1/demo/sources/{retry['preview_id']}/accept").json()["accepted"])
+
+    @unittest.skipUnless(all(importlib.util.find_spec(n) for n in ("fastapi", "langgraph", "httpx")),
+                         "Instala el extra api")
+    def test_missing_recipient_knowledge_is_not_silently_accepted(self):
+        from fastapi.testclient import TestClient
+        from isde.api import create_app
+        class Model:
+            def source(inner, policy, source, grade, context):
+                if source.user:
+                    return []
+                return [Observation(origin=source.origin, at=source.at, quote=source.text,
+                                    vocabulary=[self.concept]),
+                        Observation(origin=source.origin, at=source.at, quote="mi direccion es Roble 10",
+                                    facts=[self.fact])]
+        with tempfile.TemporaryDirectory() as folder, mock.patch.dict(os.environ, {}, clear=True):
+            path = str(Path(folder)/"data.sqlite")
+            client = TestClient(create_app(db=path, model=Model()))
+            body = {"origin":"correo_01", "at":DAY.isoformat(), "text":self.source_text,
+                    "recipients":["usuario_demo"]}
+            preview = client.post("/v1/demo/sources/preview", json=body).json()
+            self.assertIsNone(preview["preview_id"])
+            self.assertIn("usuario_demo", preview["message"])
+            self.assertTrue(preview["observations"])
+            self.assertEqual(client.post("/v1/sources", json={**body,"accept":True}).status_code, 400)
+            guard = Guard(path, self.policy, self.case)
+            try:
+                self.assertEqual(guard.proposed_vocabulary(DAY), [])
+                self.assertEqual(guard.records("usuario_demo", DAY), [])
+                self.assertEqual(guard.db.execute("SELECT count(*) FROM source_imports").fetchone()[0], 0)
+            finally:
+                guard.close()
+
+
 class GenericSecretTests(unittest.TestCase):
     def setUp(self):
         self.base = Policy.load(ROOT / "mvp-policy.yaml")
@@ -1153,6 +1459,92 @@ class SemanticApiTests(unittest.TestCase):
         self.assertEqual(current["vocabulary"]["paso_intermedio"], "Paso")
         self.assertNotIn("artificial", current["grants"]["legal"])
 
+    def test_dashboard_has_four_tabs_preserves_controls_and_starts_without_fabricated_events(self):
+        from html.parser import HTMLParser
+        class Markup(HTMLParser):
+            def __init__(self):
+                super().__init__(); self.nodes={}; self.duplicates=[]
+            def handle_starttag(self, tag, attrs):
+                attributes=dict(attrs)
+                if "id" in attributes:
+                    if attributes["id"] in self.nodes:self.duplicates.append(attributes["id"])
+                    self.nodes[attributes["id"]]=(tag,attributes)
+        page=self.client.get("/").text
+        parsed=Markup();parsed.feed(page)
+        self.assertEqual(parsed.duplicates, [])
+        for tab in ("simulation","settings","notifications","flags"):
+            self.assertEqual(parsed.nodes["tab-"+tab][1]["role"], "tab")
+            self.assertEqual(parsed.nodes["tab-"+tab][1]["aria-controls"], "panel-"+tab)
+            self.assertEqual(parsed.nodes["panel-"+tab][1]["role"], "tabpanel")
+        for name in ("source-text","preview-source","accept-source","answer","check-answer","prompt",
+                     "secret-id","secret-mode","operator-token","notification-feed","flag-feed","event-dialog"):
+            self.assertIn(name, parsed.nodes)
+        self.assertIn("No hay conexión de envío de correo", page)
+        self.assertEqual(self.client.get("/v1/demo/events").json()["counts"]["total"], 0)
+
+    def test_notifications_redact_details_require_operator_and_never_deliver_on_resolution(self):
+        from fastapi.testclient import TestClient
+        from isde.api import create_app
+        result = self.client.post("/v1/reviews", json=self.data)
+        self.assertEqual(result.json()["status"], "revise")
+        self.assertEqual(self.client.post("/v1/reviews", json=self.data).json(), result.json())
+        feed = self.client.get("/v1/demo/events").json()
+        self.assertEqual(feed["counts"], {"total":1, "blocked":1, "flagged":0, "open":1})
+        self.assertNotIn("BetaAI", str(feed))
+        self.assertNotIn("logs", str(feed))
+        event_id = feed["events"][0]["id"]
+        self.assertEqual(feed["events"][0]["title"], "Se bloqueó una posible filtración de información")
+        self.assertEqual(self.client.get(f"/v1/demo/events/{event_id}").status_code, 403)
+        self.assertEqual(self.client.post(f"/v1/demo/events/{event_id}/resolution", json={"status":"resolved"}).status_code, 403)
+        with mock.patch.dict(os.environ, {"MOSAIC_OPERATOR_TOKEN":"operator"}):
+            operator = TestClient(create_app(db=self.path, seed=False))
+        headers = {"X-Mosaic-Operator-Token":"operator"}
+        detail = operator.get(f"/v1/demo/events/{event_id}", headers=headers).json()
+        self.assertEqual(detail["details"]["candidate"], self.data["text"])
+        self.assertEqual(len(detail["details"]["logs"]), 3)
+        resolved = operator.post(f"/v1/demo/events/{event_id}/resolution", headers=headers,
+                                 json={"status":"resolved", "note":"Revisado en la demo"})
+        self.assertEqual(resolved.status_code, 200)
+        self.assertEqual(resolved.json()["status"], "resolved")
+        self.assertEqual(operator.get("/v1/demo/events").json()["counts"]["open"], 0)
+        self.assertEqual(operator.get("/v1/inbox/luis").json()["messages"], [])
+        self.assertEqual(operator.post("/v1/reviews/rev-1/deliver", json={"user":"luis"}).status_code, 400)
+        self.assertEqual(operator.post(f"/v1/demo/events/{event_id}/resolution", headers=headers,
+                                      json={"status":"resolved", "note":"Revisado en la demo"}).json(), resolved.json())
+        from isde import events
+        other = Guard(self.path, Policy.load(ROOT/"policy.yaml"),
+                      Case.load(ROOT/"case.yaml").model_copy(update={"operation":"other"}))
+        try:
+            self.assertEqual(events.listing(other)["counts"]["total"], 0)
+        finally:
+            other.close()
+
+    def test_verification_problem_is_flagged_without_claiming_a_leak_was_blocked(self):
+        data = {**self.data, "user":"ana", "text":"El plazo acaba el viernes. DESCONOCIDO"}
+        self.assertEqual(self.client.post("/v1/reviews", json=data).json()["status"], "revise")
+        feed = self.client.get("/v1/demo/events").json()
+        self.assertEqual((feed["counts"]["blocked"],feed["counts"]["flagged"]), (0,1))
+        self.assertEqual(feed["events"][0]["kind"], "flagged")
+        self.assertNotIn("filtración", feed["events"][0]["title"])
+
+    def test_source_sensitivity_is_flagged_without_marking_an_outgoing_block(self):
+        from fastapi.testclient import TestClient
+        from isde.api import create_app
+        class Model:
+            def source(self, policy, source, grade, context):
+                if source.user is None:
+                    return [Observation(origin=source.origin, at=source.at, quote=source.text, facts=[SIGN])]
+                return [Observation(origin=source.origin, at=source.at, user=source.user, grade=grade,
+                                    quote=source.text, hypotheses=[Hypothesis(claim=("p","intrinsic_sensitivity","dato"),
+                                                                          quote=source.text,p_if_seen=.8)])]
+        client = TestClient(create_app(db=self.path, model=Model()))
+        payload = {"origin":"flag_source", "at":DAY.isoformat(), "text":"O-17 firmado.", "recipients":["ana"]}
+        self.assertEqual(client.post("/v1/demo/sources/preview", json=payload).status_code, 200)
+        feed = client.get("/v1/demo/events").json()
+        self.assertEqual((feed["counts"]["blocked"],feed["counts"]["flagged"]), (0,1))
+        self.assertEqual(feed["events"][0]["target_type"], "source")
+        self.assertEqual(client.get("/v1/inbox/ana").json()["messages"], [])
+
     def test_freeform_question_reformulation_and_delivery_are_guarded(self):
         data = {**self.data, "task":"freeform", "question":"¿Qué fecha corresponde?"}
         self.assertEqual(self.client.post("/v1/reviews", json=data).json()["status"], "revise")
@@ -1354,7 +1746,7 @@ class SemanticApiTests(unittest.TestCase):
                 if source.user:
                     raise RuntimeError("falló la fuente")
                 return [Observation(origin=source.origin, at=source.at,
-                                    facts=[("o17","signature","signed")])]
+                                    facts=[("o17","signature","signed")], quote=source.text)]
         client = TestClient(create_app(db=self.path, model=Broken()))
         payload = {"origin":"failing", "at":"2026-01-04", "text":"O-17 firmado.",
                    "recipients":["ana"], "accept":True}

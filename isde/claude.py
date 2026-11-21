@@ -1,4 +1,5 @@
 """Claude reads one supplied source at a time. The application owns roles and provenance."""
+import hashlib
 import json
 import os
 from datetime import date
@@ -7,7 +8,7 @@ from pydantic import Field, ValidationError, model_validator
 
 from .privacy import rut_format_signals
 from .model import (Grade, Hypothesis, Id, INTRINSIC_FAMILY, Model, Observation, Policy, Probability,
-                    RuleProposal, Triple, intrinsic_family)
+                    RuleProposal, Triple, VocabularyProposal, intrinsic_family)
 from .prompts import ADVERSARIAL_PROMPT, INTERNAL_ONTOLOGY_PROMPT
 
 
@@ -179,6 +180,7 @@ class Suggestions(Model):
 
 class InternalSuggestions(Suggestions):
     rules: list[RuleProposal] = Field(default_factory=list, max_length=32)
+    vocabulary: list[VocabularyProposal] = Field(default_factory=list, max_length=32)
 
 
 class ObserverSuggestions(Suggestions):
@@ -218,7 +220,8 @@ def propose(policy: Policy, source: Source, grade: Grade | None = None, *, graph
     if (source.user is None) != (grade is None):
         raise ValueError("Una fuente externa requiere un grado")
     role = INTERNAL_ONTOLOGY_PROMPT if internal_prompt is None else internal_prompt
-    context = {"policy": policy.model_dump(), "ontology": graph_context, "text": source.text,
+    source_ref = "fuente_" + hashlib.sha256(source.origin.encode()).hexdigest()[:16]
+    context = {"policy": policy.model_dump(), "ontology": graph_context, "text": source.text, "source_id": source_ref,
                "grade": grade, "resource": source.resource}
     schema = InternalSuggestions
     if source.user is not None:
@@ -226,31 +229,95 @@ def propose(policy: Policy, source: Source, grade: Grade | None = None, *, graph
         context["formato_numerico"] = rut_format_signals(source.text)
         role = "Extrae en items únicamente triples explícitos de esta fuente. "
         role += "En items, confidence estima que el observador conozca la afirmación explícita. "
+        role += "No confundas el remitente de la fuente con su destinatario. "
         role += OBSERVER_ROLE if adversarial_prompt is None else adversarial_prompt
         role += INTRINSIC_INSTRUCTION
         schema = ObserverSuggestions
-    result = _request(role + " Usa identificadores canónicos en minúsculas y predicados del vocabulario "
-                      "o familias. Usa los estados definidos, salvo que any_value sea true. "
-                      "Devuelve una cita literal por triple.",
-                      context, schema, client, model)
+    if source.user is None:
+        role += (" Si un hecho explícito necesita un predicado aún no definido, propónlo en vocabulary "
+                 "con predicate, description general, quote literal y confidence. Usa ese mismo predicate "
+                 "en items o rules. No modifiques permisos ni familias, no pongas secretos en descriptions, "
+                 "y no inventes identidades: una primera persona sin nombre es una entidad de esta fuente; "
+                 "puedes identificarla con el origen de la fuente, sin confundirla con su destinatario. "
+                 "Por ejemplo, una fuente que dice 'mi dirección es Roble 10' puede proponer el predicado "
+                 "domicilio y un hecho con el valor normalizado roble_10, si la cita es exacta.")
+    role += (" Usa identificadores canónicos en minúsculas y predicados del vocabulario o familias, "
+             "incluyendo los nuevos que hayas propuesto cuando corresponda. Usa los estados definidos, "
+             "salvo que any_value sea true. Devuelve una cita literal por triple.")
+    correction = ""
+    for attempt in range(2):
+        try:
+            result = _request(role + correction, context, schema, client, model)
+        except ValueError as exc:
+            if attempt == 0 and str(exc) == "Claude devolvió una selección con formato inválido":
+                correction = " Reintenta respetando exactamente el esquema de salida y los identificadores válidos."
+                continue
+            raise
+        quotes = [item.quote for item in result.items]
+        if source.user is None:
+            quotes += [p.quote for p in result.vocabulary] + [p.quote for p in result.rules]
+            defined = set(policy.vocabulary) | set(policy.families) | {p.predicate for p in result.vocabulary}
+            used = {item.fact[1] for item in result.items}
+            used.update(atom[1] for rule in result.rules for atom in [*rule.rule.when, rule.rule.then])
+            missing = used - defined
+            empty = not result.items and not result.rules and not result.vocabulary
+        else:
+            quotes += [p.quote for p in result.hypotheses]
+            defined = set(policy.vocabulary) | set(policy.families)
+            missing = {item.fact[1] for item in result.items if item.fact[1] not in defined}
+            missing |= {h.claim[1] for h in result.hypotheses
+                        if h.claim[1] not in defined and h.claim[1] != INTRINSIC_FAMILY}
+            empty = not result.items and not result.hypotheses
+        if attempt == 0 and (empty or missing or any(not quote.strip() or quote not in source.text for quote in quotes)):
+            correction = " Revisa de nuevo: cada cita debe ser una copia literal del texto. "
+            if source.user is None:
+                correction += ("No omitas hechos explícitos por falta de predicados: propón los conceptos necesarios "
+                               "en vocabulary cuando corresponda. Si no hay hechos representables, devuelve listas vacías.")
+            else:
+                correction += ("Considera qué pistas o interpretaciones puede obtener el destinatario del texto visible. "
+                               "Usa solo los predicados disponibles; si no hay indicios, devuelve listas vacías.")
+            continue
+        break
+    vocabulary = []
+    effective = policy
+    if source.user is None:
+        seen = set()
+        for proposal in result.vocabulary:
+            proposal.validate_source(source.text)
+            if proposal.predicate in seen:
+                raise ValueError("Concepto propuesto más de una vez")
+            seen.add(proposal.predicate)
+            if proposal.predicate not in policy.vocabulary and proposal.predicate not in policy.families:
+                vocabulary.append(proposal)
+        used = {item.fact[1] for item in result.items}
+        used.update(atom[1] for rule in result.rules for atom in [*rule.rule.when, rule.rule.then])
+        if any(proposal.predicate not in used for proposal in vocabulary):
+            raise ValueError("Un concepto propuesto no está vinculado a ningún hecho o regla")
+        effective = policy.model_copy(update={"vocabulary": {**policy.vocabulary,
+                                      **{p.predicate: p.description for p in vocabulary}}})
     events = []
+    if vocabulary:
+        events.append(Observation(origin=source.origin, at=source.at, resource=source.resource,
+                                  quote=source.text, vocabulary=vocabulary, assessor=model_id(model)))
     for item in result.items:
         subject, predicate, value = item.fact
-        if item.quote not in source.text or predicate not in (policy.vocabulary.keys() | policy.families.keys()):
-            raise ValueError("Propuesta fuera de vocabulario o sin cita válida")
-        if predicate in policy.families and not policy.families[predicate].accepts(value):
+        if not item.quote.strip() or item.quote not in source.text:
+            raise ValueError("La cita del hecho no aparece literalmente en la fuente")
+        if predicate not in (effective.vocabulary.keys() | effective.families.keys()):
+            raise ValueError("El predicado del hecho no está definido ni fue propuesto")
+        if predicate in effective.families and not effective.families[predicate].accepts(value):
             raise ValueError("Estado desconocido")
         events.append(Observation(origin=source.origin, at=source.at, user=source.user, grade=grade,
                                   facts=[(subject, predicate, value)], quote=item.quote, resource=source.resource,
                                   confidence=item.confidence if source.user else None))
     if source.user is None and result.rules:
         for proposal in result.rules:
-            proposal.validate_source(policy, source.text)
+            proposal.validate_source(effective, source.text)
         events.append(Observation(origin=source.origin, at=source.at, resource=source.resource, quote=source.text,
                                   rules=result.rules, assessor=model_id(model)))
     if source.user and result.hypotheses:
         for hypothesis in result.hypotheses:
-            hypothesis.validate_source(policy, source.text)
+            hypothesis.validate_source(effective, source.text)
         events.append(Observation(origin=source.origin, at=source.at, user=source.user, grade=grade,
                                   resource=source.resource, quote=source.text, hypotheses=result.hypotheses,
                                   assessor=model_id(model)))

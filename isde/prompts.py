@@ -35,9 +35,12 @@ En rules incluye solo reglas apoyadas explícitamente por la fuente; cada una
 requiere rule, quote y confidence. Una regla tiene when (lista no vacía de
 ternas, combinadas con Y) y then (una terna). Los términos son identificadores
 canónicos en minúsculas o variables como ?x; las variables de then deben aparecer
-en when. Solo usa predicados declarados en vocabulary o families. Si una familia
+en when. Reutiliza predicados existentes cuando correspondan. Si hace falta uno
+nuevo para representar hechos explícitos, propónlo en vocabulary con una
+descripción general, una cita literal y confidence; úsalo en items o rules.
+Si una familia
 tiene any_value true, admite cualquier valor con identificador válido; de lo
-contrario usa solo sus estados declarados. No agregues familias protegidas, roles, permisos, predicados, reglas
+contrario usa solo sus estados declarados. No agregues familias protegidas, roles, permisos, reglas
 ejecutables ni identificadores de formato inválido. Puedes proponer entidades
 nuevas si la fuente las menciona y sus identificadores cumplen el esquema.
 La confianza es tu estimación

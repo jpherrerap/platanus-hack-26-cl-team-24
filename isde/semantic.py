@@ -7,7 +7,7 @@ from pydantic import Field
 
 from .claude import Source, _request, assess_hypotheses, model_id, propose
 from .guard import Guard
-from .model import Clause, Hypothesis, Model, Option, Task, Triple
+from .model import Clause, Hypothesis, Model, Observation, Option, Task, Triple
 from .prompts import DEFAULT_PROMPTS
 
 
@@ -59,34 +59,97 @@ class SourceState(TypedDict, total=False):
     accept: bool
     digest: str
     accepted: bool
+    missing_recipients: list[str]
 
 
 def source_graph(guard: Guard, model: ClaudeAnalysis):
     def internal(state):
         source = state["source"]
         proposal = Source(origin=source.origin, at=source.at, text=source.text)
-        events = model.source(guard.policy, proposal, None, guard.model_context(None, source.at))
+        policy = guard.policy_at(source.at)
+        events = model.source(policy, proposal, None, guard.model_context(None, source.at))
+        vocabulary = {}
         for event in events:
-            if event.rules:
-                if event.origin != source.origin or event.at != source.at or event.user is not None:
-                    raise ValueError("La regla propuesta no coincide con su fuente")
-                for rule in event.rules:
-                    rule.validate_source(guard.policy, source.text)
-                    rule.validate_source(guard.policy, event.quote)
+            if event.origin != source.origin or event.at != source.at or event.user is not None:
+                raise ValueError("La propuesta no coincide con su fuente")
+            for concept in event.vocabulary:
+                concept.validate_source(source.text)
+                concept.validate_source(event.quote)
+                if concept.predicate in vocabulary:
+                    raise ValueError("Concepto propuesto más de una vez")
+                if concept.predicate in policy.vocabulary or concept.predicate in policy.families:
+                    raise ValueError("El concepto propuesto ya está definido en la política")
+                vocabulary[concept.predicate] = concept.description
+            if event.facts and (not event.quote or not event.quote.strip() or event.quote not in source.text):
+                raise ValueError("El hecho requiere una cita literal de la fuente")
+        policy = policy.model_copy(update={"vocabulary": {**policy.vocabulary, **vocabulary}})
+        used = {fact[1] for event in events for fact in event.facts}
+        used.update(atom[1] for event in events for rule in event.rules for atom in [*rule.rule.when, rule.rule.then])
+        if set(vocabulary) - used:
+            raise ValueError("Un concepto propuesto no está vinculado a ningún hecho o regla")
+        for event in events:
+            for _, predicate, value in event.facts:
+                if predicate not in policy.vocabulary and predicate not in policy.families:
+                    raise ValueError("Predicado fuera del vocabulario")
+                if predicate in policy.families and not policy.families[predicate].accepts(value):
+                    raise ValueError("Estado fuera de la familia protegida")
+            for rule in event.rules:
+                rule.validate_source(policy, source.text)
+                rule.validate_source(policy, event.quote)
         return {"internal": events}
 
     def external(state):
         source = state["source"]
         events = []
+        missing = []
         for user in dict.fromkeys(source.recipients):
             proposal = Source(origin=source.origin, at=source.at, user=user, text=source.text)
-            events.extend(model.source(guard.policy, proposal, "delivered", guard.model_context(user, source.at)))
-        return {"external": events}
+            policy = guard.recipient_policy(user, source.at)
+            vocabulary = dict(policy.vocabulary)
+            aliases = {}
+            for event in state["internal"]:
+                for _, predicate, _ in event.facts:
+                    if predicate in policy.vocabulary or predicate in policy.families or predicate in aliases.values():
+                        continue
+                    index = len(aliases) + 1
+                    alias = "relacion_fuente_" + str(index)
+                    while alias in vocabulary or alias in policy.families:
+                        index += 1
+                        alias = "relacion_fuente_" + str(index)
+                    aliases[alias] = predicate
+                    vocabulary[alias] = "Posible relación expresada en el fragmento literal: " + event.quote
+            policy = policy.model_copy(update={"vocabulary": vocabulary})
+            proposed = model.source(policy, proposal, "delivered", guard.model_context(user, source.at))
+            for event in proposed:
+                if event.origin != source.origin or event.at != source.at or event.user != user:
+                    raise ValueError("La propuesta no coincide con su destinatario o fuente")
+                if event.facts and (not event.quote or not event.quote.strip() or event.quote not in source.text):
+                    raise ValueError("El hecho requiere una cita literal de la fuente")
+                for _, predicate, value in event.facts:
+                    if predicate not in policy.vocabulary and predicate not in policy.families:
+                        raise ValueError("Predicado fuera del vocabulario")
+                    if predicate in policy.families and not policy.families[predicate].accepts(value):
+                        raise ValueError("Estado fuera de la familia protegida")
+                for hypothesis in event.hypotheses:
+                    hypothesis.validate_source(policy, source.text)
+                    hypothesis.validate_source(policy, event.quote)
+                if aliases:
+                    data = event.model_dump(mode="json")
+                    data["facts"] = [[s, aliases.get(p, p), value] for s, p, value in event.facts]
+                    for hypothesis in data["hypotheses"]:
+                        hypothesis["claim"][1] = aliases.get(hypothesis["claim"][1], hypothesis["claim"][1])
+                    event = Observation.model_validate(data)
+                events.append(event)
+            if not proposed:
+                missing.append(user)
+        return {"external": events, "missing_recipients": missing}
 
     def record(state):
         events = state["internal"] + state["external"]
         accepted = False
         if state.get("accept"):
+            if state.get("missing_recipients"):
+                raise ValueError("No se extrajeron pistas para todos los destinatarios; vuelve a analizar la fuente")
             accepted = guard.observe(events, source_id=state["source"].origin, source_digest=state["digest"])
         return {"count": len(events), "accepted": accepted}
 
@@ -119,22 +182,24 @@ def inspect_graph(guard: Guard, model: ClaudeAnalysis):
     def extract(state):
         if state["task"] != "freeform" and state["task"] not in guard.case.tasks:
             raise ValueError("Tarea desconocida")
-        analysis = model.analyze(guard.policy, state["text"], state["question"])
+        policy = guard.policy_at(state["day"])
+        analysis = model.analyze(policy, state["text"], state["question"])
         for item in analysis.facts:
             _, predicate, value = item.fact
             if not item.quote.strip() or item.quote not in state["text"]:
                 raise ValueError("Afirmación sin cita literal")
-            if predicate not in guard.policy.vocabulary and predicate not in guard.policy.families:
+            if predicate not in policy.vocabulary and predicate not in policy.families:
                 raise ValueError("Relación fuera de la política")
-            if predicate in guard.policy.families and not guard.policy.families[predicate].accepts(value):
+            if predicate in policy.families and not policy.families[predicate].accepts(value):
                 raise ValueError("Estado fuera de la política")
         return {"analysis": analysis, "context": guard.model_context(state["user"], state["day"]),
                 "internal": guard.model_context(None, state["day"])}
 
     def adversary(state):
-        hypotheses = model.adversarial(guard.policy, state["text"], state["context"])
+        policy = guard.recipient_policy(state["user"], state["day"])
+        hypotheses = model.adversarial(policy, state["text"], state["context"])
         for item in hypotheses:
-            item.validate_source(guard.policy, state["text"])
+            item.validate_source(policy, state["text"])
         return {"hypotheses": hypotheses}
 
     def score(state):
