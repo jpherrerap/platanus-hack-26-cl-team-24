@@ -47,6 +47,10 @@ class Guard:
             CREATE TABLE IF NOT EXISTS dashboard_config (
                 org TEXT, op TEXT, policy TEXT, prompts TEXT, revision INTEGER,
                 PRIMARY KEY(org, op));
+            CREATE TABLE IF NOT EXISTS activity_events (
+                org TEXT, op TEXT, event_id TEXT, kind TEXT, title TEXT, created_at TEXT,
+                target_type TEXT, target_id TEXT, status TEXT, details TEXT, resolved_at TEXT, resolution_note TEXT,
+                PRIMARY KEY(org, op,event_id));
             CREATE TABLE IF NOT EXISTS semantic_reviews (
                 org TEXT, op TEXT, review_id TEXT, user TEXT, task TEXT, day TEXT, question TEXT,
                 original_hash TEXT, revision INTEGER, text TEXT, analysis TEXT,

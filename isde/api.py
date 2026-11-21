@@ -5,11 +5,12 @@ import os
 import secrets
 from datetime import date
 from threading import RLock
+from typing import Literal
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Query, Response
 from fastapi.responses import HTMLResponse
 from .semantic import ClaudeAnalysis, SourceInput, source_graph
-from . import reviews
+from . import events as activity_events, reviews
 from pydantic import BaseModel, ConfigDict, Field
 
 from .cli import EXAMPLES
@@ -75,6 +76,12 @@ class SecretUpdate(BaseModel):
     allowed_roles: list[str] = Field(default_factory=list, max_length=100)
 
 
+class EventResolution(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    status: Literal["resolved", "dismissed"]
+    note: str = Field(default="", max_length=1000)
+
+
 def create_app(*, db: str | None = None, rewrite=claude_rewrite, seed=True, model=None):
     db = db or os.environ.get("MOSAIC_API_DB", os.environ.get("ISDE_API_DB", "mosaic-api.sqlite"))
     samples = EXAMPLES
@@ -114,6 +121,10 @@ def create_app(*, db: str | None = None, rewrite=claude_rewrite, seed=True, mode
                                                revision=dashboard_config.revision+1
         """, (*guard.scope, new_policy.model_dump_json(), json.dumps(new_prompts, ensure_ascii=False)))
 
+    def require_operator(token):
+        if not operator_token or not secrets.compare_digest(operator_token.encode(), token.encode()):
+            raise HTTPException(status_code=403, detail="Acceso de operador requerido")
+
     @app.get("/", response_class=HTMLResponse)
     def dashboard():
         from .dashboard import PAGE
@@ -121,6 +132,43 @@ def create_app(*, db: str | None = None, rewrite=claude_rewrite, seed=True, mode
                             "Content-Security-Policy": "default-src 'self'; script-src 'unsafe-inline'; "
                                                        "style-src 'unsafe-inline'; object-src 'none'; "
                                                        "base-uri 'none'; frame-ancestors 'none'"})
+
+    @app.get("/v1/demo/events")
+    def activity(response: Response, limit: int = Query(default=50, ge=1, le=100)):
+        response.headers["Cache-Control"] = "no-store"
+        with lock:
+            guard = open_guard()
+            try:
+                return activity_events.listing(guard, limit)
+            finally:
+                guard.close()
+
+    @app.get("/v1/demo/events/{event_id}")
+    def event_detail(event_id: str, response: Response, x_mosaic_operator_token: str = Header(default="")):
+        require_operator(x_mosaic_operator_token)
+        response.headers["Cache-Control"] = "no-store"
+        with lock:
+            guard = open_guard()
+            try:
+                return activity_events.detail(guard, event_id)
+            except ValueError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            finally:
+                guard.close()
+
+    @app.post("/v1/demo/events/{event_id}/resolution")
+    def event_resolution(event_id: str, item: EventResolution, response: Response, x_mosaic_operator_token: str = Header(default="")):
+        require_operator(x_mosaic_operator_token)
+        response.headers["Cache-Control"] = "no-store"
+        with lock:
+            guard = open_guard()
+            try:
+                with guard.transaction():
+                    return activity_events.resolve(guard, event_id, item.status, item.note)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            finally:
+                guard.close()
 
     @app.get("/v1/demo/config")
     def configuration():
@@ -230,6 +278,7 @@ def create_app(*, db: str | None = None, rewrite=claude_rewrite, seed=True, mode
                            "recipients": {u: guard.model_context(u, source.at) for u in source.recipients}}
                 if current != context:
                     raise ValueError("El contexto cambió durante el análisis")
+                activity_events.source_event(guard, source, result)
                 if result["missing_recipients"]:
                     return {"preview_id": None, "observations": [e.model_dump(mode="json") for e in events],
                             "message": "No se extrajeron pistas para: " + ", ".join(result["missing_recipients"]) +
@@ -348,10 +397,11 @@ def create_app(*, db: str | None = None, rewrite=claude_rewrite, seed=True, mode
                             return {"accepted": False, "proposals": 0}
                 result = source_graph(guard, model).invoke(
                     {"source": data, "accept": source.accept, "digest": digest})
-                events = result["internal"] + result["external"]
+                observations = result["internal"] + result["external"]
+                activity_events.source_event(guard, data, result)
                 if source.accept:
-                    return {"accepted": result["accepted"], "proposals": len(events)}
-                return {"accepted": False, "observations": [e.model_dump(mode="json") for e in events],
+                    return {"accepted": result["accepted"], "proposals": len(observations)}
+                return {"accepted": False, "observations": [e.model_dump(mode="json") for e in observations],
                         "missing_recipients": result["missing_recipients"]}
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc

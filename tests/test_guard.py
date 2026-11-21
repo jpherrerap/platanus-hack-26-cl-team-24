@@ -1459,6 +1459,92 @@ class SemanticApiTests(unittest.TestCase):
         self.assertEqual(current["vocabulary"]["paso_intermedio"], "Paso")
         self.assertNotIn("artificial", current["grants"]["legal"])
 
+    def test_dashboard_has_four_tabs_preserves_controls_and_starts_without_fabricated_events(self):
+        from html.parser import HTMLParser
+        class Markup(HTMLParser):
+            def __init__(self):
+                super().__init__(); self.nodes={}; self.duplicates=[]
+            def handle_starttag(self, tag, attrs):
+                attributes=dict(attrs)
+                if "id" in attributes:
+                    if attributes["id"] in self.nodes:self.duplicates.append(attributes["id"])
+                    self.nodes[attributes["id"]]=(tag,attributes)
+        page=self.client.get("/").text
+        parsed=Markup();parsed.feed(page)
+        self.assertEqual(parsed.duplicates, [])
+        for tab in ("simulation","settings","notifications","flags"):
+            self.assertEqual(parsed.nodes["tab-"+tab][1]["role"], "tab")
+            self.assertEqual(parsed.nodes["tab-"+tab][1]["aria-controls"], "panel-"+tab)
+            self.assertEqual(parsed.nodes["panel-"+tab][1]["role"], "tabpanel")
+        for name in ("source-text","preview-source","accept-source","answer","check-answer","prompt",
+                     "secret-id","secret-mode","operator-token","notification-feed","flag-feed","event-dialog"):
+            self.assertIn(name, parsed.nodes)
+        self.assertIn("No hay conexión de envío de correo", page)
+        self.assertEqual(self.client.get("/v1/demo/events").json()["counts"]["total"], 0)
+
+    def test_notifications_redact_details_require_operator_and_never_deliver_on_resolution(self):
+        from fastapi.testclient import TestClient
+        from isde.api import create_app
+        result = self.client.post("/v1/reviews", json=self.data)
+        self.assertEqual(result.json()["status"], "revise")
+        self.assertEqual(self.client.post("/v1/reviews", json=self.data).json(), result.json())
+        feed = self.client.get("/v1/demo/events").json()
+        self.assertEqual(feed["counts"], {"total":1, "blocked":1, "flagged":0, "open":1})
+        self.assertNotIn("BetaAI", str(feed))
+        self.assertNotIn("logs", str(feed))
+        event_id = feed["events"][0]["id"]
+        self.assertEqual(feed["events"][0]["title"], "Se bloqueó una posible filtración de información")
+        self.assertEqual(self.client.get(f"/v1/demo/events/{event_id}").status_code, 403)
+        self.assertEqual(self.client.post(f"/v1/demo/events/{event_id}/resolution", json={"status":"resolved"}).status_code, 403)
+        with mock.patch.dict(os.environ, {"MOSAIC_OPERATOR_TOKEN":"operator"}):
+            operator = TestClient(create_app(db=self.path, seed=False))
+        headers = {"X-Mosaic-Operator-Token":"operator"}
+        detail = operator.get(f"/v1/demo/events/{event_id}", headers=headers).json()
+        self.assertEqual(detail["details"]["candidate"], self.data["text"])
+        self.assertEqual(len(detail["details"]["logs"]), 3)
+        resolved = operator.post(f"/v1/demo/events/{event_id}/resolution", headers=headers,
+                                 json={"status":"resolved", "note":"Revisado en la demo"})
+        self.assertEqual(resolved.status_code, 200)
+        self.assertEqual(resolved.json()["status"], "resolved")
+        self.assertEqual(operator.get("/v1/demo/events").json()["counts"]["open"], 0)
+        self.assertEqual(operator.get("/v1/inbox/luis").json()["messages"], [])
+        self.assertEqual(operator.post("/v1/reviews/rev-1/deliver", json={"user":"luis"}).status_code, 400)
+        self.assertEqual(operator.post(f"/v1/demo/events/{event_id}/resolution", headers=headers,
+                                      json={"status":"resolved", "note":"Revisado en la demo"}).json(), resolved.json())
+        from isde import events
+        other = Guard(self.path, Policy.load(ROOT/"policy.yaml"),
+                      Case.load(ROOT/"case.yaml").model_copy(update={"operation":"other"}))
+        try:
+            self.assertEqual(events.listing(other)["counts"]["total"], 0)
+        finally:
+            other.close()
+
+    def test_verification_problem_is_flagged_without_claiming_a_leak_was_blocked(self):
+        data = {**self.data, "user":"ana", "text":"El plazo acaba el viernes. DESCONOCIDO"}
+        self.assertEqual(self.client.post("/v1/reviews", json=data).json()["status"], "revise")
+        feed = self.client.get("/v1/demo/events").json()
+        self.assertEqual((feed["counts"]["blocked"],feed["counts"]["flagged"]), (0,1))
+        self.assertEqual(feed["events"][0]["kind"], "flagged")
+        self.assertNotIn("filtración", feed["events"][0]["title"])
+
+    def test_source_sensitivity_is_flagged_without_marking_an_outgoing_block(self):
+        from fastapi.testclient import TestClient
+        from isde.api import create_app
+        class Model:
+            def source(self, policy, source, grade, context):
+                if source.user is None:
+                    return [Observation(origin=source.origin, at=source.at, quote=source.text, facts=[SIGN])]
+                return [Observation(origin=source.origin, at=source.at, user=source.user, grade=grade,
+                                    quote=source.text, hypotheses=[Hypothesis(claim=("p","intrinsic_sensitivity","dato"),
+                                                                          quote=source.text,p_if_seen=.8)])]
+        client = TestClient(create_app(db=self.path, model=Model()))
+        payload = {"origin":"flag_source", "at":DAY.isoformat(), "text":"O-17 firmado.", "recipients":["ana"]}
+        self.assertEqual(client.post("/v1/demo/sources/preview", json=payload).status_code, 200)
+        feed = client.get("/v1/demo/events").json()
+        self.assertEqual((feed["counts"]["blocked"],feed["counts"]["flagged"]), (0,1))
+        self.assertEqual(feed["events"][0]["target_type"], "source")
+        self.assertEqual(client.get("/v1/inbox/ana").json()["messages"], [])
+
     def test_freeform_question_reformulation_and_delivery_are_guarded(self):
         data = {**self.data, "task":"freeform", "question":"¿Qué fecha corresponde?"}
         self.assertEqual(self.client.post("/v1/reviews", json=data).json()["status"], "revise")
