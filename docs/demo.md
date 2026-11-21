@@ -7,6 +7,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install .
 rm -f isde.sqlite   # borra el historial de ensayos anteriores
+python -m isde demo > /dev/null 2>&1   # la primera ejecución compila problog y avisa un SyntaxWarning inofensivo
 ```
 
 Ten la terminal con letra grande y este archivo abierto al lado.
