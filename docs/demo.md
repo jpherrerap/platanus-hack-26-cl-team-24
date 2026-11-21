@@ -90,3 +90,18 @@ No está cubierto. Cada evaluación es por destinatario, organización y operaci
 
 **¿Escala?**
 No lo medimos. La demo corre en memoria con un grafo pequeño y SQLite.
+
+**¿Por qué le entregó a Ana la contraparte en el turno 1 si eso le bloquea el turno 2? ¿No depende del orden?**
+Sí, depende del orden. ISDE decide con el historial que existe en ese momento y no anticipa preguntas futuras. Quien pregunta primero recibe la pieza, y la segunda pieza queda retenida para esa persona. Es una elección: bloquear hoy por algo que tal vez nadie pregunte empobrecería todas las respuestas. Si la empresa prefiere lo contrario, ordena el caso para que la alternativa sin la contraparte vaya primero.
+
+**¿Y si el atacante pide pedacitos, cada uno bajo el umbral?**
+Cada entrega queda en su historial con peso 0,75, y el umbral absoluto se compara con la probabilidad acumulada, no con el aumento de esa respuesta. Por eso ninguna secuencia de entregas a través de ISDE lleva una conclusión protegida a 75 % o más para esa persona. Lo que no cubre: otros canales, otras operaciones y la colusión entre destinatarios.
+
+**¿Qué pasa con lo que la persona supo por fuera de ISDE: un pasillo, un correo, otra herramienta?**
+ISDE solo cuenta lo que registra un adaptador (`isde load`, o `interpret` y `propose` con Claude) y lo que el mismo ISDE entregó. Lo que nadie registra cuenta como desconocido, así que en ese caso ISDE falla hacia permitir. La calidad de la decisión depende de la cobertura de los adaptadores.
+
+**¿Retener o recortar la respuesta no le delata al destinatario que hay un secreto?**
+ISDE no avisa nada al destinatario. Con `REPARAR` recibe una respuesta que igual cumple la tarea. Con `REVISIÓN HUMANA` no recibe nada, y la evaluación queda en SQLite solo para el operador. La ausencia o la demora sí pueden ser una señal, y no la modelamos. La revisión aún no tiene interfaz: queda registrada para que una persona decida por fuera.
+
+**¿Por qué 74 % y no otro número?**
+ProbLog exige las dos piezas: conocer la contraparte y conocer la firma. Si vienen de orígenes distintos se suponen independientes: Luis, 0,98 (citó el acta) × 0,75 (se le entregaría) ≈ 74 %; Ana en el turno 2, 0,75 × 0,75 ≈ 56 %; Inés, 0,15 × 0,75 ≈ 11 %. Las copias de un mismo origen comparten un único evento y no se suman. La independencia es un supuesto del modelo, igual que los pesos.

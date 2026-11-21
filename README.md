@@ -14,7 +14,7 @@ team-24
 
 ## ISDE
 
-ISDE es un guardrail que revisa la respuesta de un agente de IA antes de entregarla. Detecta cuándo una frase inocente, sumada a lo que el destinatario ya sabe, le permitiría deducir un secreto, y en ese caso entrega una versión que igual cumple la tarea o la deja en revisión.
+ISDE es un guardrail que revisa la respuesta de un agente de IA antes de entregarla. Detecta cuándo una frase inocente, sumada a lo que el destinatario ya sabe, le permitiría deducir un secreto, y en ese caso entrega una versión que igual cumple la tarea o la deja en revisión. Hoy trabaja sobre un catálogo de respuestas aprobadas y vinculadas a hechos, no sobre texto libre.
 
 ## Probarlo
 
