@@ -32,14 +32,18 @@ Ten la terminal con letra grande y este archivo abierto al lado.
 python -m isde demo
 ```
 
-Las cuatro preguntan «¿cuándo vence el trámite?» y el agente propone la misma respuesta: «El trámite vence el viernes. El expediente O-17 corresponde a BetaAI.» Señala en la salida:
+Las cuatro piden la tarea «due» (¿cuándo vence el trámite?) y el agente propone el mismo borrador: «El trámite vence el viernes. El expediente O-17 corresponde a BetaAI.» Cada bloque tiene cuatro pasos: contexto, borrador, evaluación y bandeja. Señala:
 
-- **ana** (ventas, sin historial): `"action": "allow"`. Recibe el borrador completo, porque no tiene la otra pieza.
-- **luis** (ventas, citó el acta de O-17): `"action": "repair"`. El primer intento aparece en `blocked` con `"before": 0.0` y `"after": 0.735` para `betaai / offer_status / signed`. El aumento supera el umbral de 0,45, así que recibe solo `"El trámite vence el viernes."`. La tarea sigue respondida.
-- **sofia** (legal sénior): `"action": "allow"` sin cambios. Su rol hereda de `legal` el permiso para recibir esa conclusión.
-- **ines** (compras, solo pudo consultar el acta): `"action": "allow"`. Hay cambio, `"after": 0.1125`, pero queda bajo los umbrales. La traza lo deja registrado igual.
+- **ana** (rol `vendor`, «no tiene pistas previas»): `PERMITIR`. Recibe el borrador completo, porque no tiene la otra pieza.
+- **luis** (rol `vendor`, «ya pudo saber (98%): o17 · signature = signed», porque citó el acta): `P(betaai · offer_status = signed) 0% → 74%`, `RETENIDO: sube al menos +45%`. La alternativa 2 no aumenta nada, así que la decisión es `REPARAR` y su bandeja recibe solo «El trámite vence el viernes.». La tarea sigue respondida.
+- **sofia** (rol `senior_legal`, que hereda de `legal`): «su rol puede recibir: offer_status», así que `PERMITIR`.
+- **ines** (rol `procurement`, solo pudo consultar el acta, 15%): sube `0% → 11%`, «bajo el umbral (75% o +45%)», así que `PERMITIR`. La traza lo deja registrado igual.
+
+La última línea resume: `ana PERMITIR · luis REPARAR · sofia PERMITIR · ines PERMITIR`.
 
 Frase para cerrar el paso: «Mismo texto, cuatro decisiones distintas. Depende de quién lo recibe y qué ya sabe».
+
+Si prefieres una vista gráfica, `python -m isde serve` abre la misma demo en http://127.0.0.1:8000/?user=luis, con barras de probabilidad antes y después. Es una vista previa en memoria: no entrega nada.
 
 ### Paso 2: la bandeja y la revisión
 

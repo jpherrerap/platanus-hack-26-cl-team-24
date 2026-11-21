@@ -28,7 +28,7 @@ python -m isde demo
 python -m unittest discover -s tests
 ```
 
-La demo usa datos ficticios, corre en memoria y no necesita clave de Claude.
+La demo usa datos ficticios, corre en memoria y no necesita clave de Claude. `python -m isde serve` muestra el mismo caso como página local en http://127.0.0.1:8000/.
 
 ## Documentación
 
