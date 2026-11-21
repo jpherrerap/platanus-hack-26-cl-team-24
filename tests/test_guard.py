@@ -2085,6 +2085,8 @@ class RelationGraphTests(unittest.TestCase):
         reading = read_path(self.policy, GOAL, ["o17 counterparty betaai"], client=client)
         self.assertEqual((reading.implies_goal, reading.confidence), (True, .8))
         self.assertEqual(self.context["camino"], ["o17 counterparty betaai"])
+        self.assertEqual((self.context["sujeto"], self.context["familia"]), ("betaai", "offer_status"))
+        self.assertNotIn("signed", json.dumps(self.context))  # The protected value never leaves.
 
     def test_semantic_review_reads_new_paths_before_scoring(self):
         from isde.semantic import DraftAssessment, inspect_graph

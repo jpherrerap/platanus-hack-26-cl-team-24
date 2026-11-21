@@ -292,8 +292,9 @@ class PathReading(Model):
 def read_path(policy, goal, sentences, *, client=None, model=None):
     """Name the relation a reader could draw between the ends of a path; the guard stores it only as a rating."""
     family = policy.families.get(goal[1])
-    context = {"camino": sentences, "desde": goal[0], "hasta": goal[2], "conclusion_protegida": list(goal),
-               "familia": family.description if family else None}
+    # The protected value stays local: the model only learns which family is at stake for which subject.
+    context = {"camino": sentences, "sujeto": goal[0], "familia": goal[1],
+               "descripcion_familia": family.description if family else None}
     return _request(PATH_PROMPT, context, PathReading, client, model)
 
 
