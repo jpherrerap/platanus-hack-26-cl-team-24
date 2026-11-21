@@ -85,3 +85,24 @@ Antes de entregar una respuesta, el canal general comprueba el texto final y los
 El vocabulario de base incluye `personal_rut` para vincular una persona o ficha con el valor canónico `rut_<cuerpo>_<dv>`, y `identifies_person` para indicar la persona titular de una ficha. Si el destinatario ya pudo conocer el RUT de esa ficha, identificar a su titular también pasa a revisión. Una respuesta de ayuda, como indicar dónde hacer el trámite, puede entregarse si cumple los requisitos de la tarea. Los permisos para conocer otras familias de secretos siguen siendo independientes.
 
 Estas comprobaciones cubren valores literales y relaciones representadas en el grafo. Interpretar preguntas abiertas, alusiones libres o cifras repartidas entre varios mensajes requiere que la integración aporte los hechos correspondientes.
+
+## Hipótesis en la ontología del observador
+
+Una hipótesis expresa una interpretación que un destinatario podría extraer de un texto o de sus antecedentes. Puede clasificar una referencia como identificador personal, relacionar dos entidades o sugerir que un cliente se prepara para abandonar un contrato. El grafo RDF del observador representa cada hipótesis en un nodo de tipo `Interpretation`, con sujeto, relación, valor, cita, origen, fecha, modelo y dos probabilidades. El grafo interno conserva únicamente los hechos aceptados.
+
+- `p_seen` estima la posibilidad de que la pista esté disponible y sea utilizable por ese observador. Procede del grado de evidencia y del límite configurado para la fuente.
+- `p_if_seen` estima la posibilidad de que el observador llegue a esa interpretación si ve la pista. Claude propone ese número a partir de la vista individual y el texto visible. La verdad de la conclusión en el mundo real es una cuestión distinta.
+
+ProbLog utiliza el producto para esa vía de inferencia. Puede combinarla con otras pistas mediante las reglas de la política. La implementación agrupa la evidencia con el mismo origen, de modo que reprocesar una copia no añade una fuente independiente. Las probabilidades del modelo requieren calibración. Los predicados, estados protegidos y umbrales se configuran en YAML.
+
+Para incorporar un texto visible para un destinatario:
+
+```bash
+isde propose examples/renewal-source.yaml --grade read > hipotesis.json
+# Revisar el destinatario, las citas y las afirmaciones antes de cargar la propuesta.
+isde load hipotesis.json
+```
+
+Para evaluar las interpretaciones de las respuestas candidatas, usa `isde preview luis due --assess` o activa `assess_drafts: true` en la política. Esta opción requiere Claude y envía a la API el texto candidato, el vocabulario y la vista del destinatario. Las vistas previas y las alternativas descartadas dejan intacto su historial. La entrega confirma únicamente las hipótesis de la respuesta que efectivamente llega a la bandeja. Si el modelo falla o cambia la vista mientras se evalúa, el mensaje queda en revisión.
+
+La política de ejemplo incluye `information_type` y `renewal_outlook`. Las señales de formato, como el dígito verificador, se calculan localmente y ayudan al modelo a interpretar el contexto. Las protecciones existentes para identificadores explícitos siguen aplicándose.

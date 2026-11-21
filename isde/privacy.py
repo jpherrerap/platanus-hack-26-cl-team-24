@@ -20,6 +20,11 @@ def valid_digit(body: str, digit: str) -> bool:
     return "0123456789K"[-checksum % 11] == digit.upper()
 
 
+def rut_format_signals(text):
+    return [{"mention": match[0], "checksum_matches": valid_digit(match[1].replace(".", ""), match[2])}
+            for match in FULL_RUT.finditer(normalize("NFKC", text))]
+
+
 class RutProtection:
     def __init__(self, private_facts, recipient_records):
         self.bodies = set()

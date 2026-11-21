@@ -1,4 +1,5 @@
 import concurrent.futures
+import json
 import tempfile
 import unittest
 from datetime import date
@@ -6,9 +7,10 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from isde.claude import Card, Source, interpret, propose
-from isde.graphs import observer_view, probabilities
+from isde.graphs import V, observer_view, probabilities, rdf_fact
+from rdflib import RDF
 from isde.guard import Guard
-from isde.model import Assignment, Batch, Case, Clause, Observation, Option, Policy, Task
+from isde.model import Assignment, Batch, Case, Clause, Hypothesis, Observation, Option, Policy, Task
 
 ROOT = Path(__file__).resolve().parents[1] / "examples"
 DAY = date(2026, 1, 4)
@@ -155,7 +157,8 @@ class ClaudeTests(unittest.TestCase):
     def client(self, items):
         def create(**request):
             self.prompt = request["messages"][0]["content"]
-            block = SimpleNamespace(type="tool_use",name="select_evidence",input={"items":items})
+            payload = items(json.loads(self.prompt)) if callable(items) else {"items": items}
+            block = SimpleNamespace(type="tool_use",name="select_evidence",input=payload)
             return SimpleNamespace(content=[block], stop_reason="tool_use")
         return SimpleNamespace(messages=SimpleNamespace(create=create))
 
@@ -178,3 +181,132 @@ class ClaudeTests(unittest.TestCase):
         self.assertIsNone(events[0].confidence)
         with self.assertRaises(ValueError):
             propose(self.policy, source, client=self.client([{**choice,"quote":"Texto inventado"}]))
+
+    def guard(self):
+        guard = Guard(":memory:", self.policy, Case.load(ROOT / "case.yaml"))
+        self.addCleanup(guard.close)
+        return guard
+
+    def test_general_hypothesis_is_observer_only_and_combines_as_conditional(self):
+        guard = self.guard()
+        quote = "Al vencimiento recojan todos los equipos."
+        goal = ("cliente_nube", "renewal_outlook", "likely_exit")
+        source = Source(origin="email_cliente", at=DAY, user="ana", text=quote)
+        pick = {"claim": goal, "quote": quote, "p_if_seen": .8}
+        client = self.client(lambda _: {"hypotheses": [pick]})
+        events = propose(self.policy, source, "read", graph_context=guard.model_context("ana", DAY), client=client)
+        guard.observe(events)
+        guard.observe(events)
+        estimates = guard.hypotheses("ana", DAY)
+        self.assertEqual(len(estimates), 1)
+        self.assertEqual((estimates[0].p_seen, estimates[0].p_if_seen), (.9, .8))
+        view = observer_view([], estimates)
+        self.assertTrue(any(view.subjects(RDF.type, V.Interpretation)))
+        self.assertNotIn(rdf_fact(goal), view)
+        self.assertAlmostEqual(probabilities(self.policy, view)[goal], .72)
+        self.assertEqual(guard.records("ana", DAY), [])
+        self.assertEqual(guard.model_context("luis", DAY)["hypotheses"], [])
+        self.assertEqual(guard.model_context(None, DAY)["facts"], [])
+        self.assertEqual(guard.hypotheses("ana", date(2025, 1, 1)), [])
+        self.assertEqual(guard.model_context("ana", DAY)["hypotheses"][0]["quote"], quote)
+
+    def test_hypothesis_can_be_a_premise_for_a_later_disclosure(self):
+        g = self.guard()
+        g.observe(Batch.load(ROOT / "history.yaml").observations)
+        q = "Ya tenemos todas las rúbricas."
+        g.observe([Observation(origin="note", user="ana", at=DAY, grade="read", quote=q,
+                               hypotheses=[Hypothesis(claim=SIGN, quote=q, p_if_seen=.95)])])
+        self.assertEqual(g.run("ana", "due", DAY)["action"], "repair")
+        self.assertEqual(g.run("ines", "due", DAY)["action"], "allow")
+
+    def test_rejected_drafts_do_not_change_history_same_number_different_context(self):
+        g = self.guard()
+        g.observe([Observation(origin="private", at=DAY, facts=[("private_label","counterparty","hidden")])])
+        number = "12.345.678-9"
+        employee = "En la ficha de la persona figura " + number + "."
+        order = "El folio de pedido es " + number + "."
+        goal = ("referencia", "information_type", "personal_identifier")
+        for key, text in [("employee", employee), ("order", order)]:
+            g.case.clauses[key] = Clause(text=text, facts=[], provides=["answer"])
+            g.case.tasks[key] = Task(requires=["answer"], options=[Option(clauses=[key])])
+        def score(context):
+            self.assertNotIn("private_label", str(context))
+            self.assertFalse(context["formato_numerico"][0]["checksum_matches"])
+            human = context["texto"] == employee
+            return {"hypotheses": [{"claim":goal, "quote":context["texto"], "p_if_seen":.90 if human else .08}]}
+        client = self.client(score)
+        preview = g.run("ana","employee",DAY,assess=True,client=client)
+        self.assertAlmostEqual(preview["attempts"][0]["blocked"][0]["after"], .675)
+        self.assertEqual((preview["action"], preview["text"]), ("review", None))
+        self.assertEqual(g.run("ana","employee",DAY,"held",assess=True,client=client)["action"], "review")
+        self.assertEqual(g.hypotheses("ana",DAY), [])
+        result = g.run("ana","order",DAY,"one",assess=True,client=client)
+        self.assertEqual([h.quote for h in g.hypotheses("ana",DAY)], [order])
+        self.assertEqual(g.hypotheses("ana",DAY)[0].p_if_seen, .08)
+        self.assertEqual((result["action"],result["text"]), ("allow",order))
+        self.assertAlmostEqual(result["attempts"][0]["changes"][0]["after"], .06)
+        self.assertEqual(g.run("ana","order",DAY,"one",assess=True,client=object()), result)
+        self.assertEqual(g.model_context("luis",DAY)["hypotheses"], [])
+
+    def test_scoped_hypotheses_require_actual_quotes_and_known_predicates(self):
+        guard = self.guard()
+        q = "Entrega aprobada."
+        claim = Hypothesis(claim=SIGN, quote=q, p_if_seen=.8)
+        with self.assertRaises(ValueError):
+            Observation(origin="paper", at=DAY, quote=q, hypotheses=[claim])
+        for change in [{"quote":"otra cita"}, {"claim":("p","invented","q")}, {"p_if_seen":3}]:
+            client = self.client(lambda _: {"hypotheses": [{**claim.model_dump(), **change}]})
+            source = Source(origin="paper", at=DAY, user="ana", text=q)
+            with self.assertRaises(ValueError):
+                propose(self.policy, source, "read", client=client, graph_context=guard.model_context("ana",DAY))
+        self.assertEqual(guard.hypotheses("ana",DAY), [])
+        with self.assertRaises(ValueError):
+            propose(self.policy, source, "read", client=object(), graph_context=guard.model_context(None,DAY))
+
+    def test_required_assessment_fails_closed_and_context_change_requires_rereview(self):
+        g = self.guard()
+        g.observe(Batch.load(ROOT / "history.yaml").observations)
+        self.policy.assess_drafts = True
+        result = g.run("ana","due",DAY,"a",client=object())
+        self.assertEqual(result["attempts"][0]["reason"], "assessment_unavailable")
+        def change(_):
+            g.observe([Observation(origin="new", at=DAY, user="ana", grade="cited", facts=[SIGN])])
+            return {"hypotheses":[]}
+        result = g.run("ana","due",DAY,"a",client=self.client(change))
+        self.assertEqual(result["attempts"][0]["reason"], "observer_context_changed")
+        self.assertEqual(g.inbox("ana"), [])
+
+    def test_repair_saves_only_the_interpretation_of_the_delivered_alternative(self):
+        g = self.guard()
+        g.observe(Batch.load(ROOT / "history.yaml").observations)
+        def evaluate(context):
+            text = context["texto"]
+            p = .95 if "BetaAI" in text else .05
+            return {"hypotheses": [{"claim": ["cliente", "renewal_outlook", "likely_exit"],
+                                    "quote": text, "p_if_seen": p}]}
+        result = g.run("ana", "due", DAY, "sent", assess=True, client=self.client(evaluate))
+        self.assertEqual(result["action"], "repair")
+        self.assertEqual([h.quote for h in g.hypotheses("ana",DAY)], [result["text"]])
+        self.assertEqual(g.hypotheses("ana",DAY)[0].p_if_seen, .05)
+        self.assertNotIn("BetaAI", g.inbox("ana")[0]["text"])
+
+    def test_hypotheses_respect_historical_permissions_and_restart(self):
+        with tempfile.TemporaryDirectory() as folder:
+            db = str(Path(folder) / "pilot.sqlite")
+            case = Case.load(ROOT / "case.yaml")
+            hint = Hypothesis(claim=SIGN, quote="La revisión terminó.", p_if_seen=.85)
+            g = Guard(db, self.policy, case)
+            try:
+                for user in ["ana","ines"]:
+                    g.observe([Observation(origin="record", user=user, grade="possible_access",
+                                           resource="signature_record", at=DAY,
+                                           quote=hint.quote, hypotheses=[hint])])
+            finally:
+                g.close()
+            g = Guard(db, self.policy, case)
+            self.addCleanup(g.close)
+            self.assertEqual(g.hypotheses("ana", DAY), [])
+            self.assertEqual(g.hypotheses("ines", DAY)[0].p_seen, .15)
+            different = Guard(db, self.policy, case.model_copy(update={"operation": "other"}))
+            self.addCleanup(different.close)
+            self.assertEqual(different.hypotheses("ines", DAY), [])

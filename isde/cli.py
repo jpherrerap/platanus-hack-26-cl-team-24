@@ -30,6 +30,7 @@ def main(argv=None):
         run = commands.add_parser(cmd)
         run.add_argument("user")
         run.add_argument("task")
+        run.add_argument("--assess", action="store_true", help="Pedir a Claude hipótesis desde la vista del destinatario")
         run.add_argument("--draft", help="Texto propuesto por el agente")
         if cmd == "deliver":
             run.add_argument("request_id")
@@ -69,7 +70,7 @@ def main(argv=None):
             show(guard.inbox(args.user))
         else:
             at = getattr(args, "at", None) or date.today()
-            show(guard.run(args.user, args.task, at, getattr(args, "request_id", None), draft=args.draft))
+            show(guard.run(args.user, args.task, at, getattr(args, "request_id", None), draft=args.draft, assess=args.assess))
         return 0
     except (ValueError, KeyError, OSError, ImportError) as exc:
         print(f"ISDE: {exc}", file=sys.stderr)

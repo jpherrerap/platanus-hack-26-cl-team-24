@@ -1,4 +1,5 @@
 version: 1
+assess_drafts: false  # Con Claude configurado, true activa el revisor adversarial de borradores.
 # Valores de partida para P(el destinatario puede usar esta pista).
 evidence: {possible_access: 0.15, external_hint: 0.50, delivered: 0.75, read: 0.90, cited: 0.98}
 vocabulary:
@@ -11,6 +12,16 @@ roles:
   legal: {read: [signature_record], receive: [offer_status]}
   senior_legal: {parents: [legal]}
 families:
+  information_type:
+    description: La mención puede revelar un identificador personal.
+    statuses: [personal_identifier]
+    absolute: 0.75
+    increase: 0.45
+  renewal_outlook:
+    description: El cliente podría estar preparando una retirada al vencer el contrato.
+    statuses: [likely_exit]
+    absolute: 0.75
+    increase: 0.45
   offer_status:
     description: Estado de firma de la oferta destinada a una contraparte.
     statuses: [signed, unsigned]
