@@ -73,7 +73,7 @@ Son valores de partida en `examples/policy.yaml`: acceso posible 0,15, entregado
 Una revelación directa sin autorización se retiene igual. Una deducción indirecta se retiene solo si la respuesta sube la probabilidad y el resultado llega a 0,75 o el aumento a 0,45. Si ya la conocía y la respuesta no agrega nada, no se retiene.
 
 **¿Y la inyección de prompts en las fuentes que lee Claude?**
-Claude responde con una herramienta forzada y esquema Pydantic. En `interpret` solo elige IDs de pistas que ya vinculó el adaptador, y la confianza queda topada por el grado de evidencia. En `propose`, cada triple exige una cita literal y vocabulario de la política, y el resultado se revisa antes de cargarlo. Rol, organización y origen nunca vienen del modelo.
+Claude responde con una herramienta forzada y esquema Pydantic. En `interpret` solo elige IDs de pistas que ya vinculó el adaptador, y la confianza queda topada por el grado de evidencia. En `propose`, cada triple exige una cita literal y vocabulario de la política, y el resultado se revisa antes de cargarlo. Rol, organización y origen nunca vienen del modelo. La salida de Claude es una propuesta no confiable: si un solo elemento falla la validación, se descarta toda la respuesta. `test_prompt_injection_in_source_cannot_choose_recipient_or_role` muestra una fuente que ordena emitir un rol para otro usuario y ISDE lo rechaza.
 
 **¿Sirve con texto libre de un agente real?**
 Hoy no. Esa es la siguiente versión: mapear texto libre a hechos. El núcleo de decisión no cambia.
