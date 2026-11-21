@@ -1,0 +1,20 @@
+version: 1
+# Valores de partida para P(el destinatario puede usar esta pista).
+evidence: {possible_access: 0.15, external_hint: 0.50, delivered: 0.75, read: 0.90, cited: 0.98}
+vocabulary:
+  counterparty: Contraparte del expediente.
+  signature: Estado explícito de firma del expediente, signed o unsigned.
+  deadline: Día de vencimiento del trámite.
+roles:
+  vendor: {}
+  procurement: {read: [signature_record]}
+  legal: {read: [signature_record], receive: [offer_status]}
+  senior_legal: {parents: [legal]}
+families:
+  offer_status:
+    description: Estado de firma de la oferta destinada a una contraparte.
+    statuses: [signed, unsigned]
+    absolute: 0.75
+    increase: 0.45
+chains:
+  - {target: counterparty, status: signature, conclusion: offer_status}

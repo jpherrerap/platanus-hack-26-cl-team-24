@@ -1,0 +1,9 @@
+origin: record_o17
+at: 2026-01-03
+user: ines
+resource: signature_record
+text: "Extracto accesible al equipo de compras. El acta indica que el expediente O-17 está firmado."
+snippets:
+  signature_o17:
+    quote: El acta indica que el expediente O-17 está firmado.
+    fact: [o17, signature, signed]

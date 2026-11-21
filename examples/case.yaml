@@ -1,0 +1,29 @@
+org: alphacorp
+operation: atlas
+assignments:
+  - {user: ana, role: vendor, org: alphacorp, operation: atlas, start: 2026-01-01}
+  - {user: luis, role: vendor, org: alphacorp, operation: atlas, start: 2026-01-01}
+  - {user: sofia, role: senior_legal, org: alphacorp, operation: atlas, start: 2026-01-01}
+  - {user: ines, role: procurement, org: alphacorp, operation: atlas, start: 2026-01-01}
+clauses:
+  deadline:
+    text: El trámite vence el viernes.
+    facts: [[o17, deadline, friday]]
+    provides: [answer_deadline]
+  identify:
+    text: El expediente O-17 corresponde a BetaAI.
+    facts: [[o17, counterparty, betaai]]
+  explicit:
+    text: La oferta para BetaAI está firmada.
+    facts: [[betaai, offer_status, signed]]
+    provides: [answer_signature]
+tasks:
+  due:
+    requires: [answer_deadline]
+    options:
+      - {clauses: [deadline, identify]}
+      - {clauses: [deadline]}
+  signature:
+    requires: [answer_signature]
+    options:
+      - {clauses: [explicit]}
