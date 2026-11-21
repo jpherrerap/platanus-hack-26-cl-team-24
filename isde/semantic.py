@@ -63,6 +63,13 @@ def source_graph(guard: Guard, model: ClaudeAnalysis):
         source = state["source"]
         proposal = Source(origin=source.origin, at=source.at, text=source.text)
         events = model.source(guard.policy, proposal, None, guard.model_context(None, source.at))
+        for event in events:
+            if event.rules:
+                if event.origin != source.origin or event.at != source.at or event.user is not None:
+                    raise ValueError("La regla propuesta no coincide con su fuente")
+                for rule in event.rules:
+                    rule.validate_source(guard.policy, source.text)
+                    rule.validate_source(guard.policy, event.quote)
         return {"internal": events}
 
     def external(state):

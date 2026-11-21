@@ -8,7 +8,7 @@ from datetime import date
 from rdflib import RDF
 
 from .graphs import E, P, R, V, internal_view, make_schema, observer_view, probabilities, rdf_fact, role_graph, user_grants
-from .model import Case, Observation, ObserverEstimate, Policy
+from .model import Case, Observation, ObserverEstimate, Policy, RuleProposal
 from .privacy import RutProtection
 
 
@@ -32,6 +32,10 @@ class Guard:
                 org TEXT, op TEXT, audience TEXT, origin TEXT, claim TEXT, day TEXT, grade TEXT,
                 cap REAL, p_if_seen REAL, quote TEXT, assessor TEXT,
                 PRIMARY KEY(org, op, audience, origin, claim, day, grade, quote, assessor));
+            CREATE TABLE IF NOT EXISTS proposed_rules (
+                org TEXT, op TEXT, origin TEXT, day TEXT, rule TEXT, quote TEXT,
+                confidence REAL, assessor TEXT,
+                PRIMARY KEY(org, op, origin, day, rule, quote, assessor));
             CREATE TABLE IF NOT EXISTS source_imports (
                 org TEXT, op TEXT, source_id TEXT, digest TEXT,
                 PRIMARY KEY(org, op, source_id));
@@ -113,6 +117,15 @@ class Guard:
                     self._record_hypothesis(event.user, "src:" + event.origin, event.at, event.grade,
                                             1. if event.confidence is None else event.confidence,
                                             hypothesis, event.assessor)
+                for proposal in event.rules:
+                    proposal.validate_source(self.policy, event.quote)
+                    self.db.execute("""
+                        INSERT INTO proposed_rules VALUES (?,?,?,?,?,?,?,?)
+                        ON CONFLICT(org,op,origin,day,rule,quote,assessor)
+                        DO UPDATE SET confidence=excluded.confidence
+                    """, (*self.scope, "src:" + event.origin, event.at.isoformat(),
+                          json.dumps(proposal.rule.model_dump(), sort_keys=True), proposal.quote,
+                          proposal.confidence, event.assessor))
                 self._record(event.user or "", "src:" + event.origin, event.facts, event.at,
                              event.grade or "internal", 1. if event.confidence is None else event.confidence,
                              event.quote)
@@ -129,14 +142,46 @@ class Guard:
         return [(origin, tuple(json.loads(fact)), min(cap, self.policy.evidence.get(grade, 1.)))
                 for origin, fact, grade, cap in rows]
 
+    def proposed_rules(self, at):
+        rows = self.db.execute("""
+            SELECT origin,day,rule,quote,confidence,assessor FROM proposed_rules
+            WHERE org=? AND op=? AND day<=? ORDER BY origin,day,rule,quote,assessor
+        """, (*self.scope, at.isoformat()))
+        result = []
+        for origin, day, rule, quote, confidence, assessor in rows:
+            proposal = RuleProposal.model_validate({"rule": json.loads(rule), "quote": quote,
+                                                    "confidence": confidence})
+            proposal.rule.validate_policy(self.policy)
+            result.append({"origin": origin, "at": day, **proposal.model_dump(mode="json"),
+                           "assessor": assessor})
+        return result
+
+    def risk_policy(self, at):
+        proposals = self.proposed_rules(at)
+        rules = list(self.policy.rules)
+        seen = {json.dumps(rule.model_dump(), sort_keys=True) for rule in rules}
+        for item in proposals:
+            key = json.dumps(item["rule"], sort_keys=True)
+            if key not in seen:
+                rules.append(RuleProposal.model_validate({k: item[k] for k in ("rule", "quote", "confidence")}).rule)
+                seen.add(key)
+        return self.policy.model_copy(update={"rules": rules})
+
     def model_context(self, user, at):
         """Export only the ontology this model is allowed to see as of the source date."""
         if user is None:
-            private = internal_view(self.schema, (f for _, f, _ in self.records("", at)), self.policy)
+            facts = [f for _, f, _ in self.records("", at)]
+            private = internal_view(self.schema, facts, self.policy)
             triples = sorted((str(s).removeprefix(str(E)), str(p).removeprefix(str(P)),
                               str(o).removeprefix(str(E))) for s, p, o in private
                              if str(p).startswith(str(P)))
-            return {"kind": "internal", "facts": triples}
+            proposals = self.proposed_rules(at)
+            potential = internal_view(self.schema, facts, self.risk_policy(at)) if proposals else private
+            inferred = sorted((str(s).removeprefix(str(E)), str(p).removeprefix(str(P)),
+                               str(o).removeprefix(str(E))) for s, p, o in potential
+                              if str(p).startswith(str(P)) and (s, p, o) not in private)
+            return {"kind": "internal", "facts": triples, "proposed_rules": proposals,
+                    "possible_inferences": inferred}
         access = role_graph(self.schema, self.case, at)
         roles = sorted({name for assignment in access.subjects(V.user, E[user])
                         for name in self.policy.roles if (assignment, RDF.type, R[name]) in access})
@@ -156,7 +201,8 @@ class Guard:
         records = self.records(user, at)
         rut_protection = RutProtection(private_facts, records)
         historical = self.hypotheses(user, at)
-        baseline = probabilities(self.policy, observer_view(records, historical))
+        risk_policy = self.risk_policy(at)
+        baseline = probabilities(risk_policy, observer_view(records, historical))
         _, allowed = user_grants(self.policy, role_graph(self.schema, self.case, at), user)
         attempts = []
         options = list(task.options)
@@ -207,7 +253,7 @@ class Guard:
                     origin = "out-text:" + hashlib.sha256(text.encode()).hexdigest()
                 projected.append(ObserverEstimate(**hypothesis.model_dump(), origin=origin,
                                                   at=at, assessor=assessor, p_seen=self.policy.evidence["delivered"]))
-            after = probabilities(self.policy, observer_view(possible, historical + projected))
+            after = probabilities(risk_policy, observer_view(possible, historical + projected))
             blocked, changes = [], []
             for goal, posterior in sorted(after.items()):
                 subject, family, status = goal
@@ -252,7 +298,7 @@ class Guard:
         if user not in {a.user for a in self.case.assignments if (a.org, a.operation) == self.scope}:
             raise ValueError(f"Destinatario fuera del directorio: {user}")
         draft_hash = request_fingerprint or (hashlib.sha256(draft.encode()).hexdigest() if draft is not None else None)
-        assessments, context, assessor = {}, None, None
+        assessments, context, internal_context, assessor = {}, None, None, None
         if assess or self.policy.assess_drafts:
             from .claude import assess_hypotheses, model_id
             with self.transaction():
@@ -260,6 +306,7 @@ class Guard:
                 if previous:
                     return previous
                 context = self.model_context(user, at)
+                internal_context = self.model_context(None, at)
             assessor = model_id(model)
             for option in self.case.tasks[task].options:
                 text = " ".join(self.case.clauses[key].text for key in option.clauses)
@@ -274,7 +321,8 @@ class Guard:
             previous = self._previous(user, request_id, task, draft_hash)
             if previous:
                 return previous
-            if context is not None and context != self.model_context(user, at):
+            if context is not None and (context != self.model_context(user, at)
+                                        or internal_context != self.model_context(None, at)):
                 return {"action": "review", "text": None, "attempts": [{"reason": "observer_context_changed"}]}
             if request_id is not None:
                 latest = self.db.execute("SELECT max(day) FROM deliveries WHERE org=? AND op=? AND audience=?",

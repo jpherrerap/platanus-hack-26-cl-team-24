@@ -25,6 +25,158 @@ LINK = ("o17", "counterparty", "betaai")
 GOAL = ("betaai", "offer_status", "signed")
 
 
+class DynamicOntologyTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.db = str(Path(self.tmp.name) / "dynamic.sqlite")
+        data = Policy.load(ROOT / "multinivel-policy.yaml").model_dump()
+        data["rules"] = []
+        self.policy = Policy.model_validate(data)
+        self.case = Case.load(ROOT / "multinivel-case.yaml")
+        self.guard = Guard(self.db, self.policy, self.case)
+        self.addCleanup(self.guard.close)
+        self.guard.observe([Observation(origin="initial", at=DAY, facts=[("x", "a", "yes")])])
+
+    def proposal(self, left, right, text=None):
+        return {"rule": {"when": [["?x", left, "yes"]], "then": ["?x", right, "yes"]},
+                "quote": text or f"{left} implica {right}", "confidence": .8}
+
+    def source_events(self, left, right, extra=None, context=None):
+        text = f"{left} implica {right}"
+        suggestion = self.proposal(left, right)
+        payload = {"items": [], "rules": [suggestion] if extra is None else extra}
+        captured = {}
+        def create(**request):
+            captured.update(request)
+            return SimpleNamespace(content=[SimpleNamespace(type="tool_use", name="select_evidence",
+                                                            input=payload)], stop_reason="tool_use")
+        client = SimpleNamespace(messages=SimpleNamespace(create=create))
+        source = Source(origin=f"rule_{left}_{right}", at=DAY, text=text)
+        events = propose(self.policy, source, graph_context=context, client=client)
+        return events, captured
+
+    def test_source_proposals_form_multilevel_risk_and_persist_with_provenance(self):
+        self.assertEqual(self.guard.run("ana", "show_a", DAY, draft="a", strict=True)["action"], "allow")
+        for left, right in [("a", "b"), ("b", "c"), ("c", "d")]:
+            events, request = self.source_events(left, right)
+            self.assertIn("una o más premisas", request["system"])
+            self.assertEqual(events[0].rules[0].confidence, .8)
+            self.guard.observe(events)
+            if right != "d":
+                self.assertEqual(self.guard.run("ana", "show_a", DAY, draft="a", strict=True)["action"], "allow")
+        view = self.guard.model_context(None, DAY)
+        self.assertIn(("x", "d", "yes"), view["possible_inferences"])
+        self.assertNotIn(("x", "d", "yes"), view["facts"])
+        self.assertEqual(len(view["proposed_rules"]), 3)
+        self.assertEqual(view["proposed_rules"][0]["quote"], "a implica b")
+        self.assertEqual(view["proposed_rules"][0]["origin"], "src:rule_a_b")
+        self.assertNotIn("proposed_rules", self.guard.model_context("ana", DAY))
+        result = self.guard.run("ana", "show_a", DAY, "blocked", draft="a", strict=True)
+        self.assertEqual(result["action"], "review")
+        self.assertEqual(result["attempts"][0]["blocked"][0]["family"], "d")
+        self.assertAlmostEqual(result["attempts"][0]["blocked"][0]["after"], .75)
+        self.assertEqual(self.guard.inbox("ana"), [])
+        reopened = Guard(self.db, self.policy, self.case)
+        self.addCleanup(reopened.close)
+        self.assertEqual(reopened.proposed_rules(DAY), view["proposed_rules"])
+        self.assertEqual(reopened.proposed_rules(date(2026, 1, 3)), [])
+        self.assertEqual(reopened.run("ana", "show_a", DAY, draft="a", strict=True)["action"], "review")
+        other = Guard(self.db, self.policy, self.case.model_copy(update={"operation": "other"}))
+        self.addCleanup(other.close)
+        self.assertEqual(other.proposed_rules(DAY), [])
+
+    def test_rule_proposals_do_not_make_unverified_statements_true(self):
+        events, _ = self.source_events("a", "b")
+        self.guard.observe(events)
+        self.case.clauses["claim_a"] = Clause(text="b", facts=[("x", "b", "yes")], provides=["answer"])
+        outcome = self.guard.run("ana", "show_a", DAY, draft="b", strict=True)
+        self.assertEqual(outcome["action"], "review")
+        self.assertEqual(outcome["attempts"][0]["reason"], "unverified_content")
+
+    def test_invalid_proposal_rolls_back_all_source_events(self):
+        valid = self.proposal("a", "b")
+        invalid = [
+            {**valid, "quote": "cita inventada"},
+            {**valid, "rule": {"when": [["?x", "unknown", "yes"]], "then": ["?x", "b", "yes"]}},
+            {**valid, "rule": {"when": [["?x", "a", "yes"]], "then": ["?y", "b", "yes"]}},
+            {**valid, "rule": {"when": [["?x", "a", "yes"]], "then": ["?x", "d", "maybe"]}},
+            {**valid, "rule": {"when": [["?x", "a),halt,( ", "yes"]], "then": ["?x", "b", "yes"]}},
+        ]
+        for bad in invalid:
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                self.source_events("a", "b", [valid, bad])
+        self.assertEqual(self.guard.proposed_rules(DAY), [])
+
+        good, _ = self.source_events("a", "b")
+        bad = good[0].model_copy(update={"quote": "otra fuente"})
+        with self.assertRaises(ValueError):
+            self.guard.observe([*good, bad], source_id="atomic", source_digest="digest")
+        self.assertEqual(self.guard.proposed_rules(DAY), [])
+        self.assertEqual(self.guard.db.execute("SELECT count(*) FROM source_imports").fetchone()[0], 0)
+
+    def test_external_observations_cannot_create_rules(self):
+        with self.assertRaises(ValueError):
+            Observation(origin="x", at=DAY, user="ana", grade="read", quote="a implica b",
+                        rules=[self.proposal("a", "b")])
+
+    @unittest.skipUnless(importlib.util.find_spec("langgraph"), "Instala el extra api")
+    def test_source_graph_checks_quote_against_actual_source(self):
+        from isde.semantic import SourceInput, source_graph
+        events, _ = self.source_events("a", "b")
+        class Model:
+            def source(self, policy, source, grade, context):
+                return events
+        source = SourceInput(origin="rule_a_b", at=DAY, text="Un texto diferente")
+        with self.assertRaises(ValueError):
+            source_graph(self.guard, Model()).invoke({"source": source, "accept": True, "digest": "d"})
+        self.assertEqual(self.guard.proposed_rules(DAY), [])
+
+    @unittest.skipUnless(all(importlib.util.find_spec(n) for n in ("fastapi", "langgraph", "httpx")),
+                         "Instala el extra api")
+    def test_api_ingests_rules_progressively_and_invalidates_old_review(self):
+        import yaml
+        from fastapi.testclient import TestClient
+        from isde.api import create_app
+        from isde.semantic import CandidateFact, DraftAssessment
+
+        outer = self
+        class Model:
+            def source(self, policy, source, grade, context):
+                left, _, right = source.text.split()
+                return outer.source_events(left, right, context=context)[0]
+            def analyze(self, policy, text, question):
+                return DraftAssessment(facts=[CandidateFact(fact=("x", "a", "yes"), quote="a")],
+                                       covers_all_claims=True, fulfills_task=True)
+            def adversarial(self, policy, text, view):
+                assert "proposed_rules" not in view
+                return []
+
+        path = Path(self.tmp.name)
+        policy_path, case_path = path / "policy.yaml", path / "case.yaml"
+        policy_path.write_text(yaml.safe_dump(self.policy.model_dump(mode="json")), encoding="utf-8")
+        case_path.write_text(yaml.safe_dump(self.case.model_dump(mode="json")), encoding="utf-8")
+        with mock.patch.dict(os.environ, {"MOSAIC_POLICY": str(policy_path), "MOSAIC_CASE": str(case_path)}):
+            client = TestClient(create_app(db=self.db, model=Model(), seed=False))
+        request = {"review_id": "old", "user": "ana", "task": "show_a", "question": "¿Qué ocurre?",
+                   "day": DAY.isoformat(), "text": "a"}
+        self.assertEqual(client.post("/v1/reviews", json=request).json()["status"], "approved")
+        for left, right in [("a", "b"), ("b", "c"), ("c", "d")]:
+            source = {"origin": f"rule_{left}_{right}", "at": DAY.isoformat(),
+                      "text": f"{left} implica {right}"}
+            preview = client.post("/v1/sources", json=source)
+            self.assertEqual(preview.status_code, 200)
+            self.assertEqual(preview.json()["observations"][0]["rules"][0]["quote"], source["text"])
+            self.assertTrue(client.post("/v1/sources", json={**source, "accept": True}).json()["accepted"])
+            self.assertFalse(client.post("/v1/sources", json={**source, "accept": True}).json()["accepted"])
+        delivery = client.post("/v1/reviews/old/deliver", json={"user": "ana"}).json()
+        self.assertEqual((delivery["action"], delivery["reason"]), ("review", "context_changed"))
+        new = client.post("/v1/reviews", json={**request, "review_id": "new"})
+        self.assertEqual(new.status_code, 200)
+        self.assertEqual(new.json()["status"], "revise")
+        self.assertEqual(client.get("/v1/inbox/ana").json()["messages"], [])
+
+
 class GuardTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

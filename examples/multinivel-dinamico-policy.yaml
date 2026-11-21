@@ -1,0 +1,15 @@
+version: 1
+evidence: {possible_access: 0.15, external_hint: 0.50, delivered: 0.75, read: 0.90, cited: 0.98}
+vocabulary:
+  a: El objeto tiene la propiedad a.
+  b: El objeto tiene la propiedad intermedia b.
+  c: El objeto tiene la propiedad intermedia c.
+roles:
+  reader: {}
+families:
+  d:
+    description: La propiedad d es confidencial.
+    statuses: ["yes"]
+    absolute: 0.75
+    increase: 0.45
+rules: []
