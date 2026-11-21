@@ -218,7 +218,7 @@ def _api_error(exc, model):
             return ValueError(f"Anthropic no reconoce el modelo {model} para esta API key")
         if "tool_choice" in str(exc).lower() and "not supported" in str(exc).lower():
             return ValueError(f"El modelo {model} no admite llamadas forzadas a herramientas")
-        return ValueError(f"Anthropic rechazó el formato de la solicitud para {model}; revisa compatibilidad del modelo")
+        return ValueError(f"Anthropic rechazó el formato de la solicitud para el modelo {model}; revisa su compatibilidad")
     if isinstance(exc, anthropic.APIStatusError):
         return ValueError(f"Claude respondió con error {exc.status_code}. Reintenta más tarde")
     raise exc
