@@ -11,6 +11,7 @@ dependencies = ["rdflib>=7.6,<8", "owlrl>=7.6,<8", "problog>=2.2,<3", "PyYAML>=6
 
 [project.optional-dependencies]
 claude = ["anthropic>=0.75,<3", "keyring>=25,<26"]
+api = ["langgraph>=1.0,<2", "fastapi>=0.115,<1", "uvicorn>=0.30,<1", "httpx>=0.27,<1", "anthropic>=0.75,<3", "keyring>=25,<26"]
 
 [project.scripts]
 isde = "isde.cli:main"

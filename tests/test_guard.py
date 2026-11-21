@@ -422,3 +422,116 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(code, 2, argv)
                 self.assertEqual(err.count("\n"), 1, err)
                 self.assertIn(message, err)
+
+
+@unittest.skipUnless(
+    all(__import__("importlib").util.find_spec(name) for name in ("fastapi", "langgraph", "httpx")),
+    "Instala el extra api para ejecutar estas pruebas",
+)
+class AgentApiTests(unittest.TestCase):
+    def setUp(self):
+        from tempfile import TemporaryDirectory
+        from fastapi.testclient import TestClient
+        from isde.api import create_app
+
+        self.tmp = TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.calls = []
+        def rewrite(draft, safe_answer, task):
+            self.calls.append((draft, safe_answer, task))
+            return safe_answer
+        self.client = TestClient(create_app(db=str(Path(self.tmp.name) / "api.sqlite"), rewrite=rewrite))
+        self.request = {"user": "luis", "task": "due",
+                        "draft": "El trámite vence el viernes. El expediente O-17 corresponde a BetaAI.",
+                        "request_id": "r1", "day": "2026-01-04"}
+
+    def test_agent_rewrites_and_final_is_rechecked_and_idempotent(self):
+        r = self.client.post("/v1/messages", json=self.request)
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json(), {"request_id": "r1", "action": "repair", "text": "El trámite vence el viernes."})
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(self.client.post("/v1/messages", json=self.request).json(), r.json())
+        self.assertEqual(len(self.calls), 1)
+        inbox = self.client.get("/v1/inbox/luis").json()["messages"]
+        self.assertEqual(inbox, [{"id": "r1", "text": "El trámite vence el viernes."}])
+        self.assertEqual(self.client.post("/v1/messages", json={**self.request, "draft": "otro"}).status_code, 409)
+
+    def test_direct_allow_and_cumulative_review(self):
+        first = {**self.request, "user":"ana"}
+        self.assertEqual(self.client.post("/v1/messages", json=first).json()["action"], "allow")
+        second = {**first, "task":"record", "request_id":"r2", "day":"2026-01-05",
+                  "draft":"El expediente O-17 ya está firmado."}
+        result = self.client.post("/v1/messages", json=second).json()
+        self.assertEqual((result["action"], result["text"]), ("review", None))
+        self.assertEqual(len(self.client.get("/v1/inbox/ana").json()["messages"]), 1)
+        self.assertEqual(self.client.post("/v1/messages", json=second).json(), result)
+
+    def test_unknown_agent_text_requires_recognizable_rewrite(self):
+        from fastapi.testclient import TestClient
+        from isde.api import create_app
+        client = TestClient(create_app(db=str(Path(self.tmp.name) / "other.sqlite"),
+                                       rewrite=lambda draft, safe_answer, task: "redacción no verificable"))
+        result = client.post("/v1/messages", json=self.request).json()
+        self.assertEqual((result["action"], result["text"]), ("review", None))
+        self.assertEqual(client.get("/v1/inbox/luis").json()["messages"], [])
+
+    def test_provider_failure_does_not_deliver_and_is_idempotent(self):
+        from fastapi.testclient import TestClient
+        from isde.api import create_app
+        def broken(*args):
+            raise RuntimeError("provider problem")
+        client = TestClient(create_app(db=str(Path(self.tmp.name) / "failure.sqlite"), rewrite=broken))
+        first = client.post("/v1/messages", json=self.request)
+        self.assertEqual(first.json()["action"], "review")
+        self.assertEqual(client.post("/v1/messages", json=self.request).json(), first.json())
+        self.assertEqual(client.get("/v1/inbox/luis").json()["messages"], [])
+
+    def test_invalid_recipient_and_bad_data(self):
+        self.assertEqual(self.client.post("/v1/messages", json={**self.request, "user":"unknown"}).status_code, 400)
+        self.assertEqual(self.client.post("/v1/messages", json={**self.request, "request_id":"  "}).status_code, 422)
+        self.assertEqual(self.client.get("/v1/inbox/unknown").status_code, 404)
+
+
+    def test_history_changes_during_rewrite_are_rechecked(self):
+        from fastapi.testclient import TestClient
+        from isde.api import create_app
+        from unittest.mock import patch
+        import yaml
+
+        path = str(Path(self.tmp.name) / "race.sqlite")
+        config = yaml.safe_load((ROOT / "policy.yaml").read_text())
+        config["vocabulary"]["vendor_sensitivity"] = "Señal sobre el plazo"
+        config["chains"].append({"target": "deadline", "status": "vendor_sensitivity", "conclusion": "offer_status"})
+        config_path = Path(self.tmp.name) / "policy.yaml"
+        config_path.write_text(yaml.safe_dump(config))
+        case = Case.load(ROOT / "case.yaml")
+        policy = Policy.load(config_path)
+        def modify(draft, safe_answer, task):
+            guard = Guard(path, policy, case)
+            try:
+                guard.observe([Observation(origin="other_channel", at=DAY, user="luis", grade="cited",
+                                           facts=[("o17", "vendor_sensitivity", "signed")])])
+            finally:
+                guard.close()
+            return safe_answer
+        with patch.dict("os.environ", {"ISDE_POLICY": str(config_path)}):
+            client = TestClient(create_app(db=path, rewrite=modify))
+        result = client.post("/v1/messages", json=self.request).json()
+        self.assertEqual((result["action"], result["text"]), ("review", None))
+        self.assertEqual(client.get("/v1/inbox/luis").json()["messages"], [])
+
+
+    def test_parallel_retry_same_request_has_one_delivery(self):
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(lambda _: self.client.post("/v1/messages", json=self.request).json(), range(2)))
+        self.assertEqual(results[0], results[1])
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(len(self.client.get("/v1/inbox/luis").json()["messages"]), 1)
+
+    def test_trusted_agent_can_record_external_evidence(self):
+        event = {"observations": [{"origin": "external_mail", "at": "2026-01-04",
+                                   "user": "ana", "grade": "cited", "facts": [SIGN]}]}
+        self.assertEqual(self.client.post("/v1/observations", json=event).json(), {"accepted": 1})
+        request = {**self.request, "user": "ana", "request_id": "after_mail"}
+        result = self.client.post("/v1/messages", json=request).json()
+        self.assertEqual((result["action"], result["text"]), ("repair", "El trámite vence el viernes."))

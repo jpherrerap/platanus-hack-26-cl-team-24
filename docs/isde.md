@@ -105,3 +105,29 @@ Qué supone o no cubre:
 - Las probabilidades dependen de pesos sin calibrar y de suponer independencia entre orígenes distintos.
 - `interpret` y `propose` envían a Anthropic la política y el texto de la fuente. Para una fuente interna también envían los hechos del grafo interno. Para una externa, solo lo atribuido a ese destinatario y sus roles.
 - No se ha medido el rendimiento con grafos grandes.
+
+## API HTTP con reformulación del agente
+
+La API de demostración recibe el borrador de un agente y usa LangGraph para evaluar, pedir una reformulación y volver a evaluar. Claude genera la reformulación con la alternativa del catálogo que el guardrail encontró admisible. ISDE evalúa el texto generado nuevamente al confirmar la entrega. Si Claude falla, el texto no coincide con el catálogo o se agotan dos intentos, la solicitud queda en revisión.
+
+```bash
+python -m pip install -e '.[api]'
+export ANTHROPIC_API_KEY="tu-clave"
+python -m uvicorn isde.api:create_app --factory --host 127.0.0.1 --port 8001
+```
+
+La clave también puede configurarse con `isde key` si el llavero del sistema está disponible. La API usa `ISDE_CLAUDE_MODEL` para seleccionar el modelo. Los borradores y la alternativa permitida se envían a Anthropic cuando se necesita reformular.
+
+Desde otra terminal:
+
+```bash
+curl -X POST http://127.0.0.1:8001/v1/messages \
+  -H 'Content-Type: application/json' \
+  -d '{"user":"luis","task":"due","day":"2026-01-04","request_id":"solicitud-1","draft":"El trámite vence el viernes. El expediente O-17 corresponde a BetaAI."}'
+```
+
+La respuesta contiene `request_id`, `action` y `text`. Los estados son `allow`, `repair` y `review`. Si queda en revisión, `text` es `null`. La bandeja simulada se consulta con `GET /v1/inbox/luis`. El destinatario solo ve las entregas confirmadas. Repetir el identificador con la misma solicitud recupera el resultado anterior. Para una nueva evaluación, usa otro identificador.
+
+Un adaptador de confianza puede registrar información recibida con `POST /v1/observations`, usando el mismo formato de `examples/history.yaml`. La API persiste evidencia y entregas en `isde-api.sqlite`. La ruta puede cambiarse con `ISDE_API_DB`. Los archivos de política, caso e historial inicial pueden sustituirse con `ISDE_POLICY`, `ISDE_CASE` e `ISDE_HISTORY`.
+
+Esta API es una demo local de un único proceso para integraciones de confianza. El agente que llama aporta destinatario, tarea e identificador de solicitud. Para un servicio accesible por red se necesita autenticación, autorización de esos datos y un adaptador de entrega real. La evaluación sigue limitada a cláusulas previamente vinculadas a hechos. Si llega un texto libre, Claude debe reformularlo en una alternativa del catálogo. Las hipótesis adversariales generales se encuentran en otra rama y todavía no participan en este flujo.

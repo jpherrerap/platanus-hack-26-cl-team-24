@@ -95,7 +95,7 @@ class Guard:
     def render(self, option):
         return " ".join(self.case.clauses[key].text for key in option.clauses)
 
-    def _decide(self, user, task_id, at, draft):
+    def _decide(self, user, task_id, at, draft, *, strict=False):
         if task_id not in self.case.tasks:
             raise ValueError(f"Tarea desconocida: {task_id}")
         task = self.case.tasks[task_id]
@@ -109,7 +109,11 @@ class Guard:
             # Agents and shells add stray spaces or newlines; compare on normalized whitespace.
             wanted = " ".join(draft.split())
             match = next((option for option in options if " ".join(self.render(option).split()) == wanted), None)
-            if match is None:
+            if strict and match is None:
+                return dict(action="review", text=None, attempts=[{"reason": "unmapped_draft"}]), None
+            if strict:
+                options = [match]
+            elif match is None:
                 attempts.append({"reason": "unmapped_draft"})
                 # For an unrecognized draft, try the shortest approved answer that completes the task.
                 options.sort(key=lambda option: len(self.render(option)))
@@ -158,13 +162,14 @@ class Guard:
                 return decision, exposed
         return dict(action="review", text=None, attempts=attempts), None
 
-    def run(self, user: str, task: str, at: date, request_id: str | None = None, *, draft: str | None = None):
+    def run(self, user: str, task: str, at: date, request_id: str | None = None, *, draft: str | None = None,
+            strict=False, request_fingerprint: str | None = None, rewritten=False):
         if not user or not task or (request_id is not None and not request_id.strip()):
             raise ValueError("Destinatario, tarea o identificador vacío")
         # A typo would otherwise start a fresh, empty history for a recipient that does not exist.
         if user not in {a.user for a in self.case.assignments if (a.org, a.operation) == self.scope}:
             raise ValueError(f"Destinatario fuera del directorio: {user}")
-        draft_hash = hashlib.sha256(draft.encode()).hexdigest() if draft is not None else None
+        draft_hash = request_fingerprint or (hashlib.sha256(draft.encode()).hexdigest() if draft is not None else None)
         with self.transaction():
             if request_id is not None:
                 previous = self.db.execute("""
@@ -179,7 +184,9 @@ class Guard:
                                          (*self.scope, user)).fetchone()[0]
                 if latest and at.isoformat() < latest:
                     raise ValueError("Una entrega nueva debe respetar el orden del historial")
-            result, exposure = self._decide(user, task, at, draft)
+            result, exposure = self._decide(user, task, at, draft, strict=strict)
+            if rewritten and result["action"] == "allow":
+                result["action"] = "repair"
             # A review is recorded too, so a retry returns it and the id cannot be reused for another request.
             if request_id is not None:
                 for origin, fact, _ in exposure or []:
