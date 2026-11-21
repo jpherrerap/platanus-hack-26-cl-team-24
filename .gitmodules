@@ -1,0 +1,3 @@
+[submodule "testbeds/alphacorp-intranet"]
+	path = testbeds/alphacorp-intranet
+	url = https://github.com/jpherrerap/alphacorp-intranet.git

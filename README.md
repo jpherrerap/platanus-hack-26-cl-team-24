@@ -50,3 +50,4 @@ La demo usa datos ficticios, corre en memoria y no necesita clave de Claude. La 
 - [docs/inferencias-multinivel.md](docs/inferencias-multinivel.md): reglas y pruebas de inferencias encadenadas.
 - [isde/prompts.py](isde/prompts.py): guías para construir la ontología interna y evaluar la perspectiva adversarial.
 - [project-description.md](project-description.md): ficha del proyecto.
+- [testbeds/alphacorp-intranet](https://github.com/jpherrerap/alphacorp-intranet): intranet MVC ficticia (Node) que usa la API de mosAIc. Es un submódulo: `git submodule update --init`.
