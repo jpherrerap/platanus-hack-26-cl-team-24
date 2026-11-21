@@ -29,7 +29,7 @@ python -m isde deliver luis due solicitud_001
 python -m isde inbox luis
 ```
 
-La salida de `preview` y `deliver` es una traza privada para el operador. El destinatario recibe exclusivamente el texto de la bandeja. En el ejemplo Luis recibe «El trámite vence el viernes». La bandeja, el historial y la selección de la respuesta se confirman en una sola transacción de SQLite. Repetir el identificador de una entrega devuelve su resultado original. La CLI es una herramienta local de confianza. Una integración debe suministrar la identidad autenticada, la organización y la operación, y publicar únicamente desde la bandeja. El envío a servicios externos requiere su propio adaptador.
+La salida de `preview` y `deliver` es una traza privada para el operador. El destinatario recibe exclusivamente el texto de la bandeja. En el ejemplo Luis recibe «El trámite vence el viernes». La bandeja, el historial y la selección de la respuesta se confirman en una sola transacción de SQLite. Repetir el identificador de una entrega devuelve su resultado original, también cuando quedó en revisión (que no llega a la bandeja), y reutilizarlo para otra tarea o borrador es un error. La CLI es una herramienta local de confianza. Una integración debe suministrar la identidad autenticada, la organización y la operación, y publicar únicamente desde la bandeja. El envío a servicios externos requiere su propio adaptador.
 
 ## Política y conocimiento
 
