@@ -162,6 +162,9 @@ class Guard:
     def run(self, user: str, task: str, at: date, request_id: str | None = None, *, draft: str | None = None):
         if not user or not task or (request_id is not None and not request_id.strip()):
             raise ValueError("Destinatario, tarea o identificador vacío")
+        # A typo would otherwise start a fresh, empty history for a recipient that does not exist.
+        if user not in {a.user for a in self.case.assignments if (a.org, a.operation) == self.scope}:
+            raise ValueError(f"Destinatario fuera del directorio: {user}")
         draft_hash = hashlib.sha256(draft.encode()).hexdigest() if draft is not None else None
         with self.transaction():
             if request_id is not None:

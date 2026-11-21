@@ -157,6 +157,8 @@ class GuardTests(unittest.TestCase):
         self.assertEqual(self.g.run("ana", "due", DAY, draft="")["action"], "repair")
         with self.assertRaises(ValueError):
             self.decision("ana", "missing")
+        with self.assertRaises(ValueError):
+            self.decision("lusi")
 
     def test_future_evidence_unavailable(self):
         self.g.observe([Observation(origin="next", facts=[SIGN], at=date(2027,1,1), grade="cited",user="ana")])
