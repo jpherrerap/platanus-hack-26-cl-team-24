@@ -36,12 +36,12 @@ def fact(triple):
     return "{} · {} = {}".format(*triple)
 
 
-def story(guard, user, task, at, draft, paint):
+def story(guard, user, task, at, draft, paint, request_id=None):
     """Deliver one demo request and narrate it as four numbered steps for a live audience."""
     # Context is captured before delivery, otherwise it would include the answer being judged.
     context = guard.model_context(user, at)
     _, allowed = user_grants(guard.policy, role_graph(guard.schema, guard.case, at), user)
-    result = guard.run(user, task, at, f"demo_{user}", draft=draft)
+    result = guard.run(user, task, at, request_id or f"demo_{user}", draft=draft)
     label, code = ACTIONS[result["action"]]
     lines = ["", paint(f"━━ {user} · rol {', '.join(context['roles']) or 'sin rol'} ━━", "1"),
              paint("1. Contexto", "1") + f"   pide la tarea «{task}»"]
@@ -93,16 +93,24 @@ def demo(guard, policy, case, history, as_json):
         print(paint(f"ISDE · {case.org}/{case.operation} · {at.isoformat()}", "1"))
         print(f"Conclusión protegida: {families}")
         print("El agente propone el mismo borrador a cada persona; ISDE decide qué llega a su bandeja.")
-    for user in users:
-        result, text = story(guard, user, task, at, draft, paint)
-        results.append({"user": user, **result})
+    turns = [(user, task, at, draft, None) for user in users]
+    # Second turn, same answer to two vendors: only the one whose first delivery named BetaAI can combine it.
+    # shortcut: the follow-up is wired to the example case; move it into the case file if more cases need one.
+    if "record" in case.tasks:
+        second = " ".join(case.clauses[key].text for key in case.tasks["record"].options[0].clauses)
+        turns += [(user, "record", date(2026, 1, 5), second, f"demo_{user}_2") for user in ("ana", "luis")]
+    for number, (user, current, day, text, request_id) in enumerate(turns):
+        if number == len(users) and not as_json:
+            print("\n" + paint(f"Turno 2 · {day.isoformat()} · cada entrega anterior ya forma parte del historial", "1"))
+        result, text = story(guard, user, current, day, text, paint, request_id)
+        results.append({"user": user, "task": current, **result})
         if not as_json:
             print(text)
     if as_json:
         show(results)
     else:
         print("\n" + paint("Resumen", "1") + " · " + " · ".join(
-            f"{r['user']} {paint(ACTIONS[r['action']][0], ACTIONS[r['action']][1])}" for r in results))
+            f"{r['user']} ({r['task']}) {paint(ACTIONS[r['action']][0], ACTIONS[r['action']][1])}" for r in results))
 
 
 def main(argv=None):

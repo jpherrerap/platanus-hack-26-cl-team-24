@@ -17,6 +17,11 @@ clauses:
     text: La oferta para BetaAI está firmada.
     facts: [[betaai, offer_status, signed]]
     provides: [answer_signature]
+  # Harmless alone: it does not name the counterparty. Combined with "identify" it reveals offer_status.
+  record:
+    text: El expediente O-17 ya está firmado.
+    facts: [[o17, signature, signed]]
+    provides: [answer_record]
 tasks:
   due:
     requires: [answer_deadline]
@@ -27,3 +32,7 @@ tasks:
     requires: [answer_signature]
     options:
       - {clauses: [explicit]}
+  record:
+    requires: [answer_record]
+    options:
+      - {clauses: [record]}

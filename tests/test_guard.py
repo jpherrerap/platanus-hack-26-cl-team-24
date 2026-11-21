@@ -43,6 +43,15 @@ class GuardTests(unittest.TestCase):
         self.assertEqual(result["action"], "repair")
         self.assertAlmostEqual(result["attempts"][0]["blocked"][0]["after"], .735)
 
+    def test_second_delivery_is_judged_against_the_first(self):
+        self.assertEqual(self.decision("ana", "record")["action"], "allow")
+        self.assertEqual(self.decision("ana", req="ana_1")["action"], "allow")
+        later = self.g.run("ana", "record", date(2026, 1, 5), "ana_2")
+        self.assertEqual(later["action"], "review")
+        self.assertAlmostEqual(later["attempts"][0]["blocked"][0]["after"], .5625)
+        self.assertEqual(self.decision("luis", "record")["action"], "allow")
+        self.assertEqual(len(self.g.inbox("ana")), 1)
+
     def test_model_ontologies_are_scoped(self):
         from json import dumps
         self.assertIn("betaai", dumps(self.g.model_context(None, DAY)))
@@ -240,12 +249,14 @@ class DemoTests(unittest.TestCase):
             self.assertIn(line, luis)
         self.assertIn("su rol puede recibir: offer_status", text)
         self.assertIn("0% → 11%", text)
-        self.assertIn("Resumen · ana PERMITIR · luis REPARAR · sofia PERMITIR · ines PERMITIR", text)
+        self.assertIn("Resumen · ana (due) PERMITIR · luis (due) REPARAR · sofia (due) PERMITIR · ines (due) PERMITIR · "
+                      "ana (record) REVISIÓN HUMANA · luis (record) PERMITIR", text)
         self.assertNotIn("\033[", text)
 
     def test_demo_json_parses(self):
         results = json.loads(self.demo("--json"))
-        self.assertEqual([r["user"] for r in results], ["ana", "luis", "sofia", "ines"])
+        self.assertEqual([r["user"] for r in results], ["ana", "luis", "sofia", "ines", "ana", "luis"])
+        self.assertEqual([r["action"] for r in results[4:]], ["review", "allow"])
         self.assertEqual(results[1]["text"], "El trámite vence el viernes.")
 
 
