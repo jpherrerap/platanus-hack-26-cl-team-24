@@ -1,6 +1,6 @@
 # ISDE
 
-Dos proveedores preguntan cuándo vence un trámite. El agente prepara la misma respuesta para ambos. «El trámite vence el viernes. El expediente O-17 corresponde a BetaAI». Uno de los proveedores ya había citado un acta donde figuraba que O-17 estaba firmado. Para él, la segunda frase revela que la oferta para BetaAI está firmada. ISDE le entrega «El trámite vence el viernes». Ambos reciben el plazo que necesitaban.
+ISDE ayuda a las empresas a evitar que sus agentes de IA revelen información confidencial de forma indirecta. Antes de responder, evalúa qué podría deducir cada destinatario a partir de la respuesta, su rol y la información previa a la que pudo haber tenido acceso.
 
 ## Cómo decide
 
