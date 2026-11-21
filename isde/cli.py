@@ -88,6 +88,7 @@ def demo(guard, policy, case, history, as_json):
         families = ", ".join(f"{name} ({family.description.rstrip('.')})" for name, family in policy.families.items())
         print(paint(f"ISDE · {case.org}/{case.operation} · {at.isoformat()}", "1"))
         print(f"Conclusión protegida: {families}")
+        print("El agente propone el mismo borrador a cada persona; ISDE decide qué llega a su bandeja.")
     for user in users:
         result, text = story(guard, user, task, at, draft, paint)
         results.append({"user": user, **result})
@@ -95,6 +96,9 @@ def demo(guard, policy, case, history, as_json):
             print(text)
     if as_json:
         show(results)
+    else:
+        print("\n" + paint("Resumen", "1") + " · " + " · ".join(
+            f"{r['user']} {paint(ACTIONS[r['action']][0], ACTIONS[r['action']][1])}" for r in results))
 
 
 def main(argv=None):

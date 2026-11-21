@@ -208,6 +208,7 @@ class DemoTests(unittest.TestCase):
             self.assertIn(line, luis)
         self.assertIn("su rol puede recibir: offer_status", text)
         self.assertIn("0% → 11%", text)
+        self.assertIn("Resumen · ana PERMITIR · luis REPARAR · sofia PERMITIR · ines PERMITIR", text)
         self.assertNotIn("\033[", text)
 
     def test_demo_json_parses(self):
