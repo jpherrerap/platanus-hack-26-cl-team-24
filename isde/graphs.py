@@ -1,8 +1,11 @@
 """RDF views, scoped role inheritance, and probability of an observer's knowledge."""
+import warnings
 from collections import defaultdict
 from datetime import date
 from decimal import Decimal
 
+# ProbLog's docstrings trigger a SyntaxWarning the first time Python 3.12+ compiles them; hide it from the demo.
+warnings.filterwarnings("ignore", "invalid escape sequence", SyntaxWarning)
 from owlrl import DeductiveClosure, OWLRL_Semantics
 from problog import get_evaluatable
 from problog.program import PrologString
