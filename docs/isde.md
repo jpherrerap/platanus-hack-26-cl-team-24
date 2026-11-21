@@ -10,28 +10,28 @@ Requiere Python 3.11 o posterior.
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -e '.[claude]'
-isde demo
+python -m isde demo
 python -m unittest discover -s tests -v
 ```
 
-La demo funciona sin credenciales. Para cada destinatario narra el contexto, el borrador del agente, la evaluación y lo que llega a su bandeja; `isde demo --json` entrega la traza completa.
+La demo funciona sin credenciales. Para cada destinatario narra el contexto, el borrador del agente, la evaluación y lo que llega a su bandeja; `python -m isde demo --json` entrega la traza completa. El guion para presentarla está en [demo.md](demo.md).
 
 `python -m isde serve` abre la misma demo como página local en http://127.0.0.1:8000/ (vista previa en memoria, sin entregas; `?user=luis` preselecciona el destinatario).
 
-Para usar un historial persistente:
+El extra `claude` solo hace falta para `key`, `interpret` y `propose`; la demo, `serve` y los tests funcionan sin él. Para usar un historial persistente:
 
 ```bash
-isde load examples/history.yaml
-isde preview luis due --draft "El trámite vence el viernes. El expediente O-17 corresponde a BetaAI."
-isde deliver luis due solicitud_001
-isde inbox luis
+python -m isde load examples/history.yaml
+python -m isde preview luis due --draft "El trámite vence el viernes. El expediente O-17 corresponde a BetaAI."
+python -m isde deliver luis due solicitud_001
+python -m isde inbox luis
 ```
 
 La salida de `preview` y `deliver` es una traza privada para el operador. El destinatario recibe exclusivamente el texto de la bandeja. En el ejemplo Luis recibe «El trámite vence el viernes». La bandeja, el historial y la selección de la respuesta se confirman en una sola transacción de SQLite. Repetir el identificador de una entrega devuelve su resultado original. La CLI es una herramienta local de confianza. Una integración debe suministrar la identidad autenticada, la organización y la operación, y publicar únicamente desde la bandeja. El envío a servicios externos requiere su propio adaptador.
 
 ## Política y conocimiento
 
-[examples/policy.yaml](../examples/policy.yaml) configura roles, herencia, permisos para consultar recursos y recibir conclusiones, vocabulario, estados protegidos y umbrales. [examples/case.yaml](../examples/case.yaml) define el ámbito, el directorio de asignaciones, las cláusulas permitidas y las alternativas en orden de utilidad. Se pueden sustituir con `isde --policy ruta --case ruta --db ruta.sqlite …`. Los identificadores de rol y de origen proceden de la integración de confianza.
+[examples/policy.yaml](../examples/policy.yaml) configura roles, herencia, permisos para consultar recursos y recibir conclusiones, vocabulario, estados protegidos y umbrales. [examples/case.yaml](../examples/case.yaml) define el ámbito, el directorio de asignaciones, las cláusulas permitidas y las alternativas en orden de utilidad. Se pueden sustituir con `python -m isde --policy ruta --case ruta --db ruta.sqlite …`. Los identificadores de rol y de origen proceden de la integración de confianza.
 
 RDFLib construye una vista interna y una vista de evidencia por destinatario a partir de eventos en SQLite. OWL 2 RL deriva la jerarquía de roles y las cadenas de propiedades. A partir de la misma cadena configurable, ProbLog calcula la probabilidad de que el observador pueda reunir las premisas. El evaluador consulta afirmaciones y negaciones explícitas. La falta de evidencia da soporte cero a esa vía y deja abierto el estado real. Una hipótesis externa plausible también puede motivar una reparación si la empresa carece de verificación interna. La traza indica si el grafo interno respalda la conclusión.
 
@@ -52,13 +52,15 @@ El modelo de probabilidad supone independencia entre orígenes distintos. Las pi
 ## Añadir Claude
 
 ```bash
-isde key
-isde load examples/history.yaml
-isde interpret examples/vendor-card.yaml --grade possible_access
-isde propose examples/internal-source.yaml > propuestas.json
+python -m isde key
+python -m isde load examples/history.yaml
+python -m isde interpret examples/vendor-card.yaml --grade possible_access
+python -m isde propose examples/internal-source.yaml > propuestas.json
 # Tras revisar las citas, los IDs y los triples propuestos:
-isde load propuestas.json
+python -m isde load propuestas.json
 ```
+
+Estos comandos requieren `pip install '.[claude]'` y una clave válida. Los tests cubren este flujo con un cliente simulado, sin llamar a la API.
 
 `isde key` usa entrada oculta y el llavero del sistema. También se admite `ANTHROPIC_API_KEY`. El modelo se elige con `ISDE_CLAUDE_MODEL`. Las llamadas envían a Anthropic la política, el texto de la fuente y la vista correspondiente. Para una tarjeta externa, se incluye únicamente el conocimiento atribuido al destinatario y sus roles aplicables.
 
@@ -69,15 +71,35 @@ isde load propuestas.json
 ```python
 from datetime import date
 from isde.guard import Guard
-from isde.model import Case, Policy
+from isde.model import Batch, Case, Policy
 
 guard = Guard("isde.sqlite", Policy.load("examples/policy.yaml"), Case.load("examples/case.yaml"))
 try:
+    # El adaptador de confianza registra la evidencia antes de decidir.
+    guard.observe(Batch.load("examples/history.yaml").observations)
     borrador = "El trámite vence el viernes. El expediente O-17 corresponde a BetaAI."
     decision = guard.run("luis", "due", date.today(), request_id="solicitud_002", draft=borrador)
-    # El consumidor autorizado lee su bandeja tras la confirmación de la entrega.
+    print(decision["action"], guard.inbox("luis"))  # repair [{'id': 'solicitud_002', 'text': 'El trámite vence el viernes.'}]
 finally:
     guard.close()
 ```
 
 Esta versión entrega respuestas compuestas de cláusulas previamente asociadas a hechos y requisitos de tarea. Un borrador que coincide con una alternativa se evalúa primero. Para texto libre desconocido, el guardrail busca la respuesta de catálogo más corta que complete la tarea y pase la evaluación. El catálogo y su correspondencia entre texto y triples son entradas de confianza. El análisis semántico de borradores arbitrarios, los grupos de destinatarios y la correlación entre distintas operaciones quedan para próximas versiones.
+
+## Modelo de amenazas y límites
+
+Qué cubre:
+
+- Un destinatario legítimo que, sin mala intención o a propósito, combina respuestas del agente con lo que ya vio para deducir una conclusión protegida mediante las cadenas declaradas en la política.
+- Una salida de Claude errónea o manipulada por texto de la fuente: el modelo solo elige IDs ofrecidos o propone triples con cita literal y vocabulario de la política, la confianza queda topada por el grado de evidencia y las propuestas de `propose` se revisan antes de cargarlas. Rol, organización, operación y origen nunca vienen del modelo.
+- Repetición y desorden: las entregas son idempotentes por `request_id`, respetan el orden del historial y la bandeja se confirma en la misma transacción que la decisión.
+
+Qué supone o no cubre:
+
+- Confía en la integración: identidad, roles, directorio, catálogo de cláusulas y su correspondencia con hechos. Si esas entradas mienten, la decisión también.
+- Solo conoce las cadenas de deducción configuradas. Una inferencia que la política no describe no se detecta.
+- No analiza texto libre arbitrario. Un borrador que no coincide con el catálogo se reemplaza por la respuesta aprobada más corta que cumple la tarea.
+- No modela colusión entre destinatarios, grupos ni correlación entre operaciones.
+- Las probabilidades dependen de pesos sin calibrar y de suponer independencia entre orígenes distintos.
+- `interpret` y `propose` envían a Anthropic la política y el texto de la fuente. Para una fuente interna también envían los hechos del grafo interno. Para una externa, solo lo atribuido a ese destinatario y sus roles.
+- No se ha medido el rendimiento con grafos grandes.

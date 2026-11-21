@@ -8,6 +8,8 @@ Antes de entregar el borrador, ISDE compara lo que el destinatario podría deduc
 
 La empresa configura en YAML qué conclusiones protege y quién puede recibirlas. El piloto elige entre respuestas previamente vinculadas a hechos verificables. Si ninguna alternativa completa la tarea dentro de la política, la deja en revisión.
 
+Límites de esta versión: las respuestas salen de un catálogo de cláusulas vinculadas a hechos, no de texto libre; los pesos de evidencia son supuestos sin calibrar; y no cubre colusión entre destinatarios.
+
 ## Probar la demo
 
 [Descargar ISDE para Python 3.11 o posterior](https://github.com/platanus-hack/platanus-hack-26-cl-team-24/archive/03b468b61483cf79a023f34339c608af84150529.zip). Descomprime el ZIP y abre una terminal en la carpeta que contiene `pyproject.toml`. Ejecuta estos comandos en macOS o Linux.
