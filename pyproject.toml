@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "isde-guard"
+version = "0.1.0"
+description = "Evaluación de divulgaciones acumulativas por destinatario"
+requires-python = ">=3.11"
+dependencies = ["rdflib>=7.6,<8", "owlrl>=7.6,<8", "problog>=2.2,<3", "PyYAML>=6,<7", "pydantic>=2.10,<3"]
+
+[project.optional-dependencies]
+claude = ["anthropic>=0.75,<3", "keyring>=25,<26"]
+
+[project.scripts]
+isde = "isde.cli:main"
+
+[tool.setuptools]
+packages = ["isde"]

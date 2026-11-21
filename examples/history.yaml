@@ -1,0 +1,15 @@
+observations:
+  - origin: internal_register
+    at: 2026-01-02
+    facts: [[o17, signature, signed], [o17, counterparty, betaai], [o17, deadline, friday]]
+  - origin: record_o17
+    user: luis
+    grade: cited
+    at: 2026-01-03
+    facts: [[o17, signature, signed]]
+  - origin: record_o17
+    user: ines
+    grade: possible_access
+    resource: signature_record
+    at: 2026-01-03
+    facts: [[o17, signature, signed]]

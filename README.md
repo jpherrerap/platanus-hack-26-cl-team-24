@@ -6,6 +6,8 @@
 
 Track: 🛡️ AI Security
 
+[ISDE · instalación, demo e integración del guardrail](docs/isde.md)
+
 team-24
 
 - Claudio Alexis Canales Pavez ([@claudiocanalespavez](https://github.com/claudiocanalespavez))
