@@ -131,7 +131,7 @@ def main(argv=None):
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("demo", help="Caso aislado y reproducible en memoria").add_argument(
         "--json", action="store_true", help="Salida JSON en lugar del relato")
-    commands.add_parser("serve", help="Demo visual en http://127.0.0.1 (en memoria, sin entregas)").add_argument(
+    commands.add_parser("serve", help="Demo visual en http://127.0.0.1 (en memoria; las entregas duran hasta reiniciar)").add_argument(
         "--port", type=int, default=8000)
     commands.add_parser("key", help="Guardar API key de Claude en el llavero")
     commands.add_parser("load", help="Registrar evidencia desde un adaptador de confianza").add_argument("file")

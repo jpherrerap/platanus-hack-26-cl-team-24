@@ -1,4 +1,4 @@
-"""Local visual demo: one page over an in-memory Guard with preview semantics (nothing is delivered)."""
+"""Local visual demo: one page over an in-memory Guard; deliveries live only until reset or exit."""
 import json
 import secrets
 from datetime import date
@@ -11,6 +11,7 @@ from .model import Batch
 
 DAY = date(2026, 1, 4)
 MAX_DRAFT = 2000
+MAX_BODY = 8192
 
 PAGE = """<!doctype html>
 <html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -30,22 +31,27 @@ section{{background:var(--card);border:1px solid var(--line);border-radius:8px;p
 .tag{{font-size:.8rem;color:var(--mute);text-transform:uppercase;letter-spacing:.04em}}
 .allow{{color:var(--ok)}} .repair{{color:var(--warn)}} .review{{color:var(--bad)}} .decision{{font-size:1.3rem;font-weight:700}}
 .bar{{height:10px;background:var(--line);border-radius:5px;overflow:hidden;margin:2px 0 6px}} .bar span{{display:block;height:100%;background:var(--bar)}}
-.blocked .bar span{{background:var(--bad)}} ul{{margin:0;padding-left:1.2em}} blockquote{{margin:0;font-size:1.1rem}}
+.blocked .bar span{{background:var(--bad)}} .empty{{list-style:none;margin-left:-1.2em}} ul,ol{{margin:0;padding-left:1.2em}} blockquote{{margin:0;font-size:1.1rem}}
 </style></head><body><main>
 <h1>ISDE · ¿qué puede deducir el destinatario?</h1>
-<p class="lead">Caso ficticio en memoria al {day}. Vista previa: no se entrega nada ni se guarda historial.</p>
+<p class="lead">Caso ficticio en memoria al {day}. «Evaluar» es una vista previa. «Entregar» confirma la entrega y la suma al historial
+del destinatario, así que cuenta en la siguiente evaluación. «Reiniciar» vuelve al historial de ejemplo.</p>
 <form id="f">
 <label>Destinatario<select id="user">{users}</select></label>
 <label>Tarea<select id="task">{tasks}</select></label>
 <label class="wide">Borrador del agente (vacío = respuesta del catálogo)<textarea id="draft" maxlength="{max_draft}"></textarea></label>
 <button type="submit">Evaluar</button>
+<button type="button" id="deliver">Entregar</button>
+<button type="button" id="reset">Reiniciar</button>
 </form>
 <p id="error" class="review" role="alert"></p>
+<p id="status" role="status"></p>
 <div class="grid" aria-live="polite">
 <section><span class="tag">Operador · traza privada</span><h2>Borrador evaluado</h2><blockquote id="o-draft"></blockquote></section>
 <section><span class="tag">Operador · traza privada</span><h2>Probabilidad de deducir la conclusión protegida</h2><div id="o-bars"></div></section>
 <section><span class="tag">Operador · traza privada</span><h2>Decisión</h2><p id="o-action" class="decision"></p></section>
-<section><span class="tag">Destinatario · solo ve su bandeja</span><h2>Texto que llegaría a la bandeja</h2><blockquote id="r-text"></blockquote></section>
+<section><span class="tag">Destinatario · solo ve su bandeja</span><h2>Texto que llegaría a la bandeja</h2><blockquote id="r-text"></blockquote>
+<h3 id="r-inbox-title">Bandeja (entregas confirmadas)</h3><ol id="r-inbox"></ol></section>
 <section><span class="tag">Lo que se cree que sabe el destinatario (sin grafo interno)</span><h2>Contexto del observador</h2><div id="o-ctx"></div></section>
 </div></main>
 <script nonce="{nonce}">
@@ -56,12 +62,22 @@ const REASONS = {{unmapped_draft: "El borrador no está en el catálogo", incomp
   unverified_content: "Contenido sin respaldo interno"}};
 function el(tag, text, cls) {{ const n = document.createElement(tag); if (text !== undefined) n.textContent = text; if (cls) n.className = cls; return n; }}
 function bar(x) {{ const b = el("div", undefined, "bar"), s = el("span"); s.style.width = pct(x).replace(" ", ""); b.setAttribute("aria-hidden", "true"); b.append(s); return b; }}
-async function evaluate(keepDraft) {{
-  const q = new URLSearchParams({{user: $("user").value, task: $("task").value}});
-  if (keepDraft && $("draft").value.trim()) q.set("draft", $("draft").value);
-  const r = await fetch("/api/preview?" + q), data = await r.json();
+async function evaluate(keepDraft, deliver) {{
+  const q = {{user: $("user").value, task: $("task").value}};
+  if (keepDraft && $("draft").value.trim()) q.draft = $("draft").value;
+  const r = deliver
+    ? await fetch("/api/deliver", {{method: "POST", headers: {{"Content-Type": "application/json"}}, body: JSON.stringify(q)}})
+    : await fetch("/api/preview?" + new URLSearchParams(q));
+  const data = await r.json();
   $("error").textContent = r.ok ? "" : data.error;
   if (!r.ok) return;
+  $("status").textContent = !deliver ? "Vista previa: no se entregó nada."
+    : data.delivered ? `Entregado a ${{data.user}}. Desde ahora cuenta en su historial.`
+    : `Retenido para revisión humana: no se entregó nada a ${{data.user}}.`;
+  $("r-inbox-title").textContent = `Bandeja de ${{data.user}} (entregas confirmadas)`;
+  const inbox = $("r-inbox"); inbox.replaceChildren();
+  data.inbox.forEach(m => inbox.append(el("li", m.text)));
+  if (!data.inbox.length) inbox.append(el("li", "Vacía.", "empty"));
   if (!keepDraft) $("draft").value = data.draft;
   $("o-draft").textContent = data.draft;
   const a = $("o-action"); a.textContent = NAMES[data.action]; a.className = "decision " + data.action;
@@ -88,18 +104,79 @@ async function evaluate(keepDraft) {{
 }}
 for (const [k, v] of new URLSearchParams(location.search)) if (["user", "task"].includes(k)) $(k).value = v;
 $("f").addEventListener("submit", e => {{ e.preventDefault(); evaluate(true); }});
+$("deliver").addEventListener("click", () => evaluate(true, true));
+$("reset").addEventListener("click", async () => {{
+  const r = await fetch("/api/reset", {{method: "POST", headers: {{"Content-Type": "application/json"}}, body: "{{}}"}});
+  await evaluate(false);
+  $("status").textContent = r.ok ? "Historial reiniciado al ejemplo." : "No se pudo reiniciar.";
+}});
 $("user").addEventListener("change", () => evaluate(false));
 $("task").addEventListener("change", () => evaluate(false));
 evaluate(false);
 </script></body></html>"""
 
 
-def respond(guard: Guard, path: str, host: str):
-    """Return (status, content_type, body, nonce) so tests can exercise routing without sockets."""
+def fields(guard: Guard, query: dict):
+    """Validate recipient, task and draft at the HTTP boundary; raise ValueError with a user-facing message."""
+    user, task, draft = (query.get(k, "") for k in ("user", "task", "draft"))
+    if not all(isinstance(v, str) for v in (user, task, draft)):
+        raise ValueError("Campos inválidos")
+    if user not in {a.user for a in guard.case.assignments}:
+        raise ValueError("Destinatario desconocido")
+    if task not in guard.case.tasks:
+        raise ValueError("Tarea desconocida")
+    if len(draft) > MAX_DRAFT:
+        raise ValueError(f"El borrador supera {MAX_DRAFT} caracteres")
+    return user, task, draft or None
+
+
+def evaluate(guard: Guard, user, task, draft, request_id=None):
+    # Context is captured before delivery, otherwise it would include the answer being judged.
+    observer = guard.model_context(user, DAY)
+    result = guard.run(user, task, DAY, request_id, draft=draft)
+    shown = draft or " ".join(guard.case.clauses[k].text for k in guard.case.tasks[task].options[0].clauses)
+    return {"user": user, "task": task, "draft": shown, **result, "observer": observer,
+            "delivered": request_id is not None and result["action"] != "review", "inbox": guard.inbox(user)}
+
+
+def respond(state: dict, method: str, path: str, headers=None, body: bytes = b""):
+    """Return (status, content_type, body, nonce) so tests can exercise routing without sockets.
+
+    state holds the live in-memory Guard under "guard" and a factory under "fresh" for /api/reset.
+    """
+    headers = headers or {}
+    host = headers.get("Host") or ""
     # A DNS-rebinding page reaches 127.0.0.1 under its own hostname; refusing foreign Hosts keeps the operator trace local.
     if urlsplit("//" + host).hostname not in {"127.0.0.1", "localhost"}:
         return 403, "application/json", {"error": "Host no permitido"}, None
-    url = urlsplit(path)
+    url, guard = urlsplit(path), state["guard"]
+    routes = {"/": "GET", "/api/preview": "GET", "/api/deliver": "POST", "/api/reset": "POST"}
+    if url.path not in routes:
+        return 404, "application/json", {"error": "Ruta desconocida"}, None
+    if method != routes[url.path]:
+        return 405, "application/json", {"error": "Método no permitido"}, None
+    if method == "POST":
+        if headers.get("Origin") != f"http://{host}":
+            return 403, "application/json", {"error": "Origen no permitido"}, None
+        # JSON content type cannot be sent by a plain cross-site form, a second CSRF barrier.
+        if (headers.get("Content-Type") or "").split(";")[0].strip() != "application/json":
+            return 415, "application/json", {"error": "Se espera application/json"}, None
+        if len(body) > MAX_BODY:
+            return 413, "application/json", {"error": "Solicitud demasiado grande"}, None
+    if url.path == "/api/reset":
+        state["guard"].close()
+        state["guard"] = state["fresh"]()
+        return 200, "application/json", {"ok": True}, None
+    if url.path == "/api/deliver":
+        try:
+            query = json.loads(body or b"{}")
+            if not isinstance(query, dict):
+                raise ValueError("Se espera un objeto JSON")
+            user, task, draft = fields(guard, query)
+            # Every click is a new request; the guard still decides before anything reaches the inbox.
+            return 200, "application/json", evaluate(guard, user, task, draft, "web_" + secrets.token_hex(6)), None
+        except ValueError as exc:  # json.JSONDecodeError and UnicodeDecodeError are ValueErrors
+            return 400, "application/json", {"error": str(exc)}, None
     if url.path == "/":
         nonce = secrets.token_urlsafe(16)
         users = dict.fromkeys(a.user for a in guard.case.assignments)
@@ -107,35 +184,39 @@ def respond(guard: Guard, path: str, host: str):
                            users="".join(f'<option value="{escape(u)}">{escape(u)}</option>' for u in users),
                            tasks="".join(f'<option value="{escape(t)}">{escape(t)}</option>' for t in guard.case.tasks))
         return 200, "text/html; charset=utf-8", page, nonce
-    if url.path != "/api/preview":
-        return 404, "application/json", {"error": "Ruta desconocida"}, None
-    query = parse_qs(url.query)
-    user, task = query.get("user", [""])[0], query.get("task", [""])[0]
-    draft = query.get("draft", [""])[0] or None
-    if user not in {a.user for a in guard.case.assignments}:
-        return 400, "application/json", {"error": "Destinatario desconocido"}, None
-    if task not in guard.case.tasks:
-        return 400, "application/json", {"error": "Tarea desconocida"}, None
-    if draft is not None and len(draft) > MAX_DRAFT:
-        return 400, "application/json", {"error": f"El borrador supera {MAX_DRAFT} caracteres"}, None
     try:
-        result = guard.run(user, task, DAY, draft=draft)
+        query = {k: v[0] for k, v in parse_qs(url.query).items()}
+        return 200, "application/json", evaluate(guard, *fields(guard, query)), None
     except ValueError as exc:
         return 400, "application/json", {"error": str(exc)}, None
-    shown = draft or " ".join(guard.case.clauses[k].text for k in guard.case.tasks[task].options[0].clauses)
-    return 200, "application/json", {"user": user, "task": task, "draft": shown, **result,
-                                     "observer": guard.model_context(user, DAY)}, None
 
 
 def serve(policy, case, history, port=8000):
     if not 0 < port < 65536:
         raise ValueError(f"Puerto inválido: {port}")
-    guard = Guard(":memory:", policy, case)
-    guard.observe(Batch.load(history).observations)
+    observations = Batch.load(history).observations
+
+    def fresh():
+        guard = Guard(":memory:", policy, case)
+        guard.observe(observations)
+        return guard
+
+    state = {"guard": fresh(), "fresh": fresh}
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
-            status, kind, body, nonce = respond(guard, self.path, self.headers.get("Host", ""))
+            self.reply(respond(state, "GET", self.path, self.headers))
+
+        def do_POST(self):
+            try:
+                length = max(0, int(self.headers.get("Content-Length") or 0))
+            except ValueError:
+                length = 0
+            # Read at most one byte past the limit so an oversized body is detected without buffering it.
+            self.reply(respond(state, "POST", self.path, self.headers, self.rfile.read(min(length, MAX_BODY + 1))))
+
+        def reply(self, response):
+            status, kind, body, nonce = response
             data = (body if isinstance(body, str) else json.dumps(body, ensure_ascii=False)).encode()
             self.send_response(status)
             self.send_header("Content-Type", kind)
@@ -147,7 +228,7 @@ def serve(policy, case, history, port=8000):
             self.end_headers()
             self.wfile.write(data)
 
-    # shortcut: single-threaded server on loopback, fine for a local pitch; add auth before exposing it.
+    # shortcut: single-threaded server on loopback, so requests never race on the shared in-memory Guard; add auth before exposing it.
     server = HTTPServer(("127.0.0.1", port), Handler)
     print(f"ISDE demo en http://127.0.0.1:{port}/ (Ctrl+C para salir)")
     try:
@@ -156,4 +237,4 @@ def serve(policy, case, history, port=8000):
         pass
     finally:
         server.server_close()
-        guard.close()
+        state["guard"].close()

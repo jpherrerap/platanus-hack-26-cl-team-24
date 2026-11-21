@@ -184,12 +184,21 @@ class GuardTests(unittest.TestCase):
 
 
 class ServeTests(unittest.TestCase):
+    HOST = {"Host": "127.0.0.1:8000"}
+    POST = {**HOST, "Origin": "http://127.0.0.1:8000", "Content-Type": "application/json"}
+
     def setUp(self):
         from isde.serve import respond
-        self.g = Guard(":memory:", Policy.load(ROOT / "policy.yaml"), Case.load(ROOT / "case.yaml"))
-        self.addCleanup(self.g.close)
-        self.g.observe(Batch.load(ROOT / "history.yaml").observations)
-        self.get = lambda path, host="127.0.0.1:8000": respond(self.g, path, host)
+
+        def fresh():
+            guard = Guard(":memory:", Policy.load(ROOT / "policy.yaml"), Case.load(ROOT / "case.yaml"))
+            guard.observe(Batch.load(ROOT / "history.yaml").observations)
+            return guard
+        self.state = {"guard": fresh(), "fresh": fresh}
+        self.addCleanup(lambda: self.state["guard"].close())
+        self.g = self.state["guard"]
+        self.get = lambda path, headers=self.HOST: respond(self.state, "GET", path, headers)
+        self.post = lambda path, body, headers=self.POST: respond(self.state, "POST", path, headers, json.dumps(body).encode())
 
     def test_page_and_preview_without_delivery(self):
         status, kind, page, nonce = self.get("/")
@@ -200,7 +209,20 @@ class ServeTests(unittest.TestCase):
         self.assertEqual((status, body["action"], body["text"]), (200, "repair", "El trámite vence el viernes."))
         self.assertEqual(body["observer"]["kind"], "observer")
         self.assertNotIn("betaai", str(body["observer"]))
+        self.assertEqual((body["delivered"], body["inbox"]), (False, []))
         self.assertEqual(self.g.inbox("luis"), [])
+
+    def test_delivery_accumulates_until_reset(self):
+        self.assertEqual(self.post("/api/deliver", {"user": "ana", "task": "due"})[2]["delivered"], True)
+        status, _, body, _ = self.get("/api/preview?user=ana&task=record")
+        self.assertEqual((status, body["action"], len(body["inbox"])), (200, "review", 1))
+        self.assertEqual(body["observer"]["kind"], "observer")
+        held = self.post("/api/deliver", {"user": "ana", "task": "record"})[2]
+        self.assertEqual((held["delivered"], len(held["inbox"])), (False, 1))
+        self.assertEqual(self.get("/api/preview?user=luis&task=record")[2]["action"], "allow")
+        self.assertEqual(self.post("/api/reset", {})[0], 200)
+        body = self.get("/api/preview?user=ana&task=record")[2]
+        self.assertEqual((body["action"], body["inbox"]), ("allow", []))
 
     def test_boundary_validation_and_escaping(self):
         from isde.serve import serve
@@ -210,14 +232,32 @@ class ServeTests(unittest.TestCase):
         self.assertEqual(self.get("/nada")[0], 404)
         # DNS rebinding: a foreign hostname resolving to loopback must not read the operator trace.
         for host in ("evil.example:8000", "", "127.0.0.1.evil.example", "localhost@evil.example"):
-            self.assertEqual(self.get("/api/preview?user=luis&task=due", host)[0], 403, host)
-        self.assertEqual(self.get("/", "localhost:8000")[0], 200)
+            self.assertEqual(self.get("/api/preview?user=luis&task=due", {"Host": host})[0], 403, host)
+        self.assertEqual(self.get("/", {"Host": "localhost:8000"})[0], 200)
         with self.assertRaises(ValueError):
             serve(self.g.policy, self.g.case, ROOT / "history.yaml", 70000)
+        self.assertEqual(self.post("/api/deliver", {"user": "mallory", "task": "due"})[0], 400)
+        self.assertEqual(self.post("/api/deliver", {"user": ["ana"], "task": "due"})[0], 400)
+        self.assertEqual(self.post("/api/deliver", ["ana"])[0], 400)
+        self.assertEqual(self.post("/api/deliver", {"user": "ana", "task": "due", "draft": "a" * 9000})[0], 413)
+        from isde.serve import respond
+        self.assertEqual(respond(self.state, "POST", "/api/deliver", self.POST, b"\xff{")[0], 400)
         self.g.case.tasks["<script>"] = self.g.case.tasks["due"]
         self.assertNotIn("<script>", self.get("/")[2].split("<option")[-1])
         _, _, body, _ = self.get("/api/preview?user=ana&task=due&draft=%3Cb%3Ehola")
         self.assertEqual((body["draft"], body["action"]), ("<b>hola", "repair"))
+
+    def test_state_changes_need_post_local_host_and_same_origin(self):
+        self.assertEqual(self.get("/api/deliver?user=ana&task=due")[0], 405)
+        self.assertEqual(self.post("/api/preview", {})[0], 405)
+        deliver = {"user": "ana", "task": "due"}
+        for headers in ({**self.POST, "Origin": "http://evil.example"}, {**self.POST, "Origin": "null"},
+                        {k: v for k, v in self.POST.items() if k != "Origin"},
+                        {**self.POST, "Host": "evil.example:8000", "Origin": "http://evil.example:8000"}):
+            self.assertEqual(self.post("/api/deliver", deliver, headers)[0], 403, headers)
+        self.assertEqual(self.post("/api/deliver", deliver, {**self.POST, "Content-Type": "text/plain"})[0], 415)
+        self.assertEqual(self.post("/api/reset", {}, {**self.POST, "Origin": "http://evil.example"})[0], 403)
+        self.assertEqual(self.g.inbox("ana"), [])
 
 
 class ClaudeTests(unittest.TestCase):

@@ -52,7 +52,14 @@ Ahora Ana y Luis piden la tarea «record» y el agente propone «El expediente O
 
 Frase: «Un guardrail que mira una respuesta a la vez habría dejado pasar las dos».
 
-El `Resumen` final repite las seis decisiones, una línea por turno. Si hay tiempo o piden verlo gráfico: `python -m isde serve` y abrir http://127.0.0.1:8000/?user=luis. Es una vista previa en memoria del turno 1: no entrega nada, así que no acumula historial entre consultas.
+El `Resumen` final repite las seis decisiones, una línea por turno.
+
+Opcional, si hay tiempo o piden verlo gráfico: `python -m isde serve` y abrir http://127.0.0.1:8000/?user=ana. «Evaluar» es vista previa. «Entregar» confirma la entrega en memoria y la suma al historial. «Reiniciar» vuelve al historial de ejemplo. Recorrido:
+
+1. **ana**, tarea `due`: `Permitir`. Pulsa «Entregar»: la bandeja de Ana muestra el mensaje.
+2. Cambia la tarea a `record`: el contexto ya incluye `o17 · counterparty · betaai`, la barra sube de 0 % a 56,3 % y la decisión es `Revisión humana`.
+3. Cambia a **luis**: `Permitir`.
+4. «Reiniciar» antes de volver a mostrarlo.
 
 ## 4. Límites honestos (30 s)
 
