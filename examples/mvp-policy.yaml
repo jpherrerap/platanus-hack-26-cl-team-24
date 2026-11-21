@@ -1,0 +1,9 @@
+version: 1
+evidence: {possible_access: 0.15, external_hint: 0.50, delivered: 0.75, read: 0.90, cited: 0.98}
+vocabulary: {}
+roles:
+  usuario: {}
+  revisor: {}
+families: {}
+chains: []
+rules: []

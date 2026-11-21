@@ -110,11 +110,15 @@ Qué supone o no cubre:
 
 ## API HTTP con reformulación del agente
 
-La API de demostración recibe el borrador de un agente y usa LangGraph para evaluar, pedir una reformulación y volver a evaluar. Claude genera la reformulación con la alternativa del catálogo que el guardrail encontró admisible. mosAIc evalúa el texto generado nuevamente al confirmar la entrega. Si Claude falla, el texto no coincide con el catálogo o se agotan dos intentos, la solicitud queda en revisión.
+La API de demostración recibe el borrador de un agente y usa LangGraph para evaluar, pedir una reformulación y volver a evaluar. Claude genera la reformulación con la alternativa del catálogo que el guardrail encontró admisible. mosAIc evalúa el texto generado nuevamente al confirmar la entrega. Si Claude falla, el texto no coincide con el catálogo o se agotan dos intentos, la solicitud queda en revisión. Los comandos siguientes usan explícitamente el caso empresarial histórico; la API sin estas variables inicia el perfil genérico del panel.
 
 ```bash
 python -m pip install -e '.[api]'
 export ANTHROPIC_API_KEY="tu-clave"
+export MOSAIC_POLICY=examples/policy.yaml
+export MOSAIC_CASE=examples/case.yaml
+export MOSAIC_HISTORY=examples/history.yaml
+export MOSAIC_API_DB=mosaic-ejemplo.sqlite
 python -m uvicorn isde.api:create_app --factory --host 127.0.0.1 --port 8001
 ```
 
@@ -130,7 +134,7 @@ curl -X POST http://127.0.0.1:8001/v1/messages \
 
 La respuesta contiene `request_id`, `action` y `text`. Los estados son `allow`, `repair` y `review`. Si queda en revisión, `text` es `null`. La bandeja simulada se consulta con `GET /v1/inbox/luis`. El destinatario solo ve las entregas confirmadas. Repetir el identificador con la misma solicitud recupera el resultado anterior. Para una nueva evaluación, usa otro identificador.
 
-Un adaptador de confianza puede registrar información recibida con `POST /v1/observations`, usando el mismo formato de `examples/history.yaml`. La API persiste evidencia y entregas en `isde-api.sqlite`. La ruta puede cambiarse con `ISDE_API_DB`. Los archivos de política, caso e historial inicial pueden sustituirse con `ISDE_POLICY`, `ISDE_CASE` e `ISDE_HISTORY`.
+Un adaptador de confianza puede registrar información recibida con `POST /v1/observations`, usando el mismo formato de `examples/history.yaml`. La API persiste evidencia y entregas en `mosaic-api.sqlite` por defecto. La ruta puede cambiarse con `MOSAIC_API_DB` o `ISDE_API_DB`. Los archivos de política, caso e historial inicial pueden sustituirse con `MOSAIC_POLICY`, `MOSAIC_CASE` y `MOSAIC_HISTORY`, o sus equivalentes con prefijo `ISDE_`.
 
 Esta API es una demo local de un único proceso para integraciones de confianza. El agente que llama aporta destinatario, tarea e identificador de solicitud. Para un servicio accesible por red se necesita autenticación, autorización de esos datos y un adaptador de entrega real. Este endpoint de catálogo conserva el ciclo de reformulación con Claude. Los endpoints semánticos siguientes reciben revisiones de un agente externo y usan la vista adversarial.
 ## RUT de personas

@@ -8,7 +8,7 @@ from datetime import date
 from rdflib import RDF
 
 from .graphs import E, P, R, V, internal_view, make_schema, observer_view, probabilities, rdf_fact, role_graph, user_grants
-from .model import Case, Observation, ObserverEstimate, Policy, RuleProposal
+from .model import Case, INTRINSIC_FAMILY, Observation, ObserverEstimate, Policy, RuleProposal, intrinsic_family
 from .privacy import RutProtection
 
 
@@ -109,7 +109,7 @@ class Guard:
                 if any(predicate not in permitted for _, predicate, _ in event.facts):
                     raise ValueError("Predicado fuera del vocabulario")
                 for _, predicate, value in event.facts:
-                    if predicate in self.policy.families and value not in self.policy.families[predicate].statuses:
+                    if predicate in self.policy.families and not self.policy.families[predicate].accepts(value):
                         raise ValueError("Estado fuera de la familia protegida")
                 if event.grade == "possible_access":
                     roles = role_graph(self.schema, self.case, event.at)
@@ -169,7 +169,8 @@ class Guard:
             if key not in seen:
                 rules.append(RuleProposal.model_validate({k: item[k] for k in ("rule", "quote", "confidence")}).rule)
                 seen.add(key)
-        return self.policy.model_copy(update={"rules": rules})
+        families = {**self.policy.families, INTRINSIC_FAMILY: intrinsic_family()}
+        return self.policy.model_copy(update={"rules": rules, "families": families})
 
     def model_context(self, user, at):
         """Export only the ontology this model is allowed to see as of the source date."""
@@ -238,9 +239,7 @@ class Guard:
             ambiguous = any(predicate in self.policy.families and
                             len(set(private.objects(E[subject], P[predicate]))) > 1
                             for subject, predicate, _ in facts)
-            if ambiguous or any(rdf_fact(f) not in private for f in facts):
-                attempts.append({"reason": "unverified_content"})
-                continue
+            unverified = ambiguous or any(rdf_fact(f) not in private for f in facts)
             # A repeated disclosure of the same facts shares one exposure origin.
             exposed = []
             clause_origins = {}
@@ -266,19 +265,24 @@ class Guard:
                     continue
                 prior = baseline.get(goal, 0.)
                 delta = posterior - prior
-                rule = self.policy.families[family]
+                rule = risk_policy.families[family]
                 direct = goal in facts
                 entry = dict(subject=subject, family=family, status=status, before=prior,
                              after=posterior, increase=delta, direct=direct,
                              internally_supported=rdf_fact(goal) in private)
-                if delta > 1e-9 or direct:
+                intrinsic_risk = family == INTRINSIC_FAMILY and any(
+                    h.claim == goal and h.p_seen * h.p_if_seen >= rule.increase for h in projected)
+                if delta > 1e-9 or direct or intrinsic_risk:
                     changes.append(entry)
-                if direct or (delta > 1e-9 and (posterior >= rule.absolute or delta >= rule.increase)):
+                if direct or intrinsic_risk or (delta > 1e-9 and (posterior >= rule.absolute or delta >= rule.increase)):
                     blocked.append(entry)
             attempt = {"changes": changes, "blocked": blocked}
             if projected:
                 attempt["hypotheses"] = [h.model_dump(mode="json") for h in projected]
             attempts.append(attempt)
+            if not blocked and unverified:
+                attempt["reason"] = "unverified_content"
+                continue
             if not blocked:
                 decision = dict(action="allow" if len(attempts) == 1 else "repair", text=text, attempts=attempts)
                 return decision, (exposed, projected)

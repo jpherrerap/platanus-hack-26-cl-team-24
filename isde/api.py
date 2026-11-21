@@ -68,7 +68,8 @@ class VocabularyUpdate(BaseModel):
 class SecretUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     description: str = Field(min_length=1, max_length=2000)
-    statuses: list[str] = Field(min_length=1, max_length=32)
+    statuses: list[str] = Field(default_factory=list, max_length=32)
+    any_value: bool = False
     absolute: float = Field(ge=0, le=1, allow_inf_nan=False)
     increase: float = Field(ge=0, le=1, allow_inf_nan=False)
     allowed_roles: list[str] = Field(default_factory=list, max_length=100)
@@ -77,9 +78,9 @@ class SecretUpdate(BaseModel):
 def create_app(*, db: str | None = None, rewrite=claude_rewrite, seed=True, model=None):
     db = db or os.environ.get("MOSAIC_API_DB", os.environ.get("ISDE_API_DB", "mosaic-api.sqlite"))
     samples = EXAMPLES
-    policy = Policy.load(os.environ.get("MOSAIC_POLICY", os.environ.get("ISDE_POLICY", str(samples / "policy.yaml"))))
-    case = Case.load(os.environ.get("MOSAIC_CASE", os.environ.get("ISDE_CASE", str(samples / "case.yaml"))))
-    history = Batch.load(os.environ.get("MOSAIC_HISTORY", os.environ.get("ISDE_HISTORY", str(samples / "history.yaml")))) if seed else None
+    policy = Policy.load(os.environ.get("MOSAIC_POLICY", os.environ.get("ISDE_POLICY", str(samples / "mvp-policy.yaml"))))
+    case = Case.load(os.environ.get("MOSAIC_CASE", os.environ.get("ISDE_CASE", str(samples / "mvp-case.yaml"))))
+    history = Batch.load(os.environ.get("MOSAIC_HISTORY", os.environ.get("ISDE_HISTORY", str(samples / "mvp-history.yaml")))) if seed else None
     lock = RLock()
     operator_token = os.environ.get("MOSAIC_OPERATOR_TOKEN")
     prompts = dict(DEFAULT_PROMPTS)
@@ -154,10 +155,15 @@ def create_app(*, db: str | None = None, rewrite=claude_rewrite, seed=True, mode
             try:
                 if set(item.allowed_roles) - policy.roles.keys():
                     raise ValueError("Rol desconocido")
-                if name in policy.families and set(policy.families[name].statuses) - set(item.statuses):
-                    raise ValueError("No se pueden eliminar estados protegidos existentes desde el panel")
+                if name in policy.families:
+                    existing = policy.families[name]
+                    if existing.any_value and not item.any_value:
+                        raise ValueError("No se puede reducir una familia que protege cualquier valor")
+                    if not item.any_value and set(existing.statuses) - set(item.statuses):
+                        raise ValueError("No se pueden eliminar estados protegidos existentes desde el panel")
                 data = policy.model_dump(mode="json")
                 data["families"][name] = Family(description=item.description, statuses=item.statuses,
+                                                any_value=item.any_value,
                                                 absolute=item.absolute, increase=item.increase).model_dump(mode="json")
                 for role, entry in data["roles"].items():
                     entry["receive"] = [family for family in entry["receive"] if family != name]
@@ -167,7 +173,7 @@ def create_app(*, db: str | None = None, rewrite=claude_rewrite, seed=True, mode
                 for table, column in (("evidence", "fact"), ("interpretations", "claim")):
                     for (encoded,) in guard.db.execute(f"SELECT {column} FROM {table} WHERE org=? AND op=?", guard.scope):
                         _, predicate, value = json.loads(encoded)
-                        if predicate == name and value not in item.statuses:
+                        if predicate == name and not updated.families[name].accepts(value):
                             raise ValueError("Un estado existente quedaría fuera de la familia protegida")
                 for proposal in guard.proposed_rules(date.max):
                     from .model import Rule

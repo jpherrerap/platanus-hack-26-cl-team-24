@@ -12,6 +12,7 @@ Triple = tuple[Id, Id, Id]
 RuleTerm = Annotated[str, Field(pattern=r"^(?:[a-z][a-z0-9_]{0,95}|\?[a-z][a-z0-9_]{0,95})$")]
 RuleAtom = tuple[RuleTerm, Id, RuleTerm]
 Grade = Literal["possible_access", "external_hint", "delivered", "read", "cited"]
+INTRINSIC_FAMILY = "intrinsic_sensitivity"
 
 
 class Model(BaseModel):
@@ -47,9 +48,24 @@ class Role(Model):
 
 class Family(Model):
     description: str
-    statuses: Annotated[list[Id], Field(min_length=1)]
+    statuses: list[Id] = []
+    any_value: bool = False
     absolute: Probability
     increase: Probability
+
+    @model_validator(mode="after")
+    def values(self):
+        if self.any_value == bool(self.statuses):
+            raise ValueError("Elige cualquier valor o una lista no vacía de estados")
+        return self
+
+    def accepts(self, value):
+        return self.any_value or value in self.statuses
+
+
+def intrinsic_family():
+    return Family(description="Información potencialmente sensible identificada por el análisis adversarial.",
+                  any_value=True, absolute=.75, increase=.45)
 
 
 class Chain(Model):
@@ -78,7 +94,7 @@ class Rule(Model):
             if predicate not in predicates:
                 raise ValueError("Predicado sin definición")
             if predicate in policy.families and not value.startswith("?"):
-                if value not in policy.families[predicate].statuses:
+                if not policy.families[predicate].accepts(value):
                     raise ValueError("Estado fuera de la familia protegida")
 
 
@@ -108,10 +124,10 @@ class Policy(Model):
         # Reserve the same meanings in every deployment, including older YAML policies.
         self.vocabulary.setdefault("personal_rut", "RUT/RUN de una persona o ficha, en formato rut_<cuerpo>_<dv>.")
         self.vocabulary.setdefault("identifies_person", "Enlaza una ficha (sujeto) con su titular (objeto).")
+        if INTRINSIC_FAMILY in self.families or INTRINSIC_FAMILY in self.vocabulary:
+            raise ValueError("El identificador intrinsic_sensitivity está reservado")
         if set(self.evidence) != {"possible_access", "external_hint", "delivered", "read", "cited"}:
             raise ValueError("Faltan grados de evidencia")
-        if not self.families:
-            raise ValueError("La política requiere una familia protegida")
         for name, role in self.roles.items():
             if set(role.parents) - self.roles.keys() or set(role.receive) - self.families.keys():
                 raise ValueError(f"Referencia desconocida en el rol {name}")
@@ -191,9 +207,9 @@ class Hypothesis(Model):
         _, predicate, value = self.claim
         if not self.quote.strip() or self.quote not in text:
             raise ValueError("La hipótesis requiere una cita literal de la fuente visible")
-        if predicate not in policy.vocabulary and predicate not in policy.families:
+        if predicate != INTRINSIC_FAMILY and predicate not in policy.vocabulary and predicate not in policy.families:
             raise ValueError("Predicado de hipótesis desconocido")
-        if predicate in policy.families and value not in policy.families[predicate].statuses:
+        if predicate in policy.families and not policy.families[predicate].accepts(value):
             raise ValueError("Estado de hipótesis desconocido")
 
 
