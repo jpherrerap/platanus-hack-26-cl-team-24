@@ -9,6 +9,8 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 Id = Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]{0,95}$")]
 Probability = Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
 Triple = tuple[Id, Id, Id]
+RuleTerm = Annotated[str, Field(pattern=r"^(?:[a-z][a-z0-9_]{0,95}|\?[a-z][a-z0-9_]{0,95})$")]
+RuleAtom = tuple[RuleTerm, Id, RuleTerm]
 Grade = Literal["possible_access", "external_hint", "delivered", "read", "cited"]
 
 
@@ -58,13 +60,27 @@ class Chain(Model):
     conclusion: Id
 
 
+class Rule(Model):
+    when: Annotated[list[RuleAtom], Field(min_length=1)]
+    then: RuleAtom
+
+    @model_validator(mode="after")
+    def bound_variables(self):
+        bound = {term for atom in self.when for term in (atom[0], atom[2]) if term.startswith("?")}
+        output = {term for term in (self.then[0], self.then[2]) if term.startswith("?")}
+        if output - bound:
+            raise ValueError("Las variables de la conclusión deben aparecer en las premisas")
+        return self
+
+
 class Policy(Model):
     version: Literal[1]
     roles: dict[Id, Role]
     evidence: dict[Grade, Probability]
     vocabulary: dict[Id, str]
     families: dict[Id, Family]
-    chains: list[Chain]
+    chains: list[Chain] = []
+    rules: list[Rule] = []
     assess_drafts: bool = False
 
     @model_validator(mode="after")
@@ -87,13 +103,17 @@ class Policy(Model):
                 if parent in self.roles and parent not in ancestors:
                     ancestors.add(parent)
                     pending.extend(self.roles[parent].parents)
+        predicates = self.vocabulary.keys() | self.families.keys()
         for chain in self.chains:
-            if {chain.target, chain.status} - self.vocabulary.keys():
+            if {chain.target, chain.status, chain.conclusion} - predicates:
                 raise ValueError("Predicado sin definición")
-            if chain.conclusion not in self.families:
-                raise ValueError("Conclusión sin política")
-            if chain.target in self.families or chain.status in self.families:
-                raise ValueError("Esta versión admite cadenas de un solo nivel")
+        for rule in self.rules:
+            for _, predicate, value in [*rule.when, rule.then]:
+                if predicate not in predicates:
+                    raise ValueError("Predicado sin definición")
+                if predicate in self.families and not value.startswith("?"):
+                    if value not in self.families[predicate].statuses:
+                        raise ValueError("Estado fuera de la familia protegida")
         for family in self.families.values():
             if len(set(family.statuses)) != len(family.statuses):
                 raise ValueError("Estados repetidos")

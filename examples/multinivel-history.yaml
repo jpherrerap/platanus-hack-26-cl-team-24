@@ -1,0 +1,4 @@
+observations:
+  - origin: internal
+    at: 2026-01-01
+    facts: [[x, a, "yes"]]

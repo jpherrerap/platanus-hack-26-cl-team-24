@@ -61,11 +61,69 @@ def user_grants(policy: Policy, graph: Graph, user: str):
     return read, receive
 
 
-def internal_view(schema, facts):
+def logical_rules(policy):
+    rules = []
+    for chain in policy.chains:
+        rules.append((
+            [("?doc", chain.target, "?target"), ("?doc", chain.status, "?state")],
+            ("?target", chain.conclusion, "?state"),
+        ))
+    rules.extend((rule.when, rule.then) for rule in policy.rules)
+    return rules
+
+
+def _match(graph, atom, bindings):
+    subject, predicate, value = atom
+
+    def fixed(term):
+        if term.startswith("?"):
+            return bindings.get(term)
+        return E[term]
+
+    for actual_subject, _, actual_value in graph.triples((fixed(subject), P[predicate], fixed(value))):
+        found = bindings.copy()
+        valid = True
+        for term, actual in ((subject, actual_subject), (value, actual_value)):
+            if not term.startswith("?"):
+                continue
+            if term in found and found[term] != actual:
+                valid = False
+                break
+            found[term] = actual
+        if valid:
+            yield found
+
+
+def close_rules(graph, rules):
+    # Positive, range-restricted rules cannot create individuals; closure is finite.
+    while True:
+        additions = set()
+        for premises, conclusion in rules:
+            matches = [{}]
+            for atom in premises:
+                matches = [result for binding in matches for result in _match(graph, atom, binding)]
+                if not matches:
+                    break
+            subject, predicate, value = conclusion
+            for binding in matches:
+                left = binding[subject] if subject.startswith("?") else E[subject]
+                right = binding[value] if value.startswith("?") else E[value]
+                fact = (left, P[predicate], right)
+                if fact not in graph:
+                    additions.add(fact)
+        if not additions:
+            return graph
+        for fact in additions:
+            graph.add(fact)
+
+
+def internal_view(schema, facts, policy=None):
     graph = Graph() + schema
     for fact in facts:
         graph.add(rdf_fact(fact))
     DeductiveClosure(OWLRL_Semantics).expand(graph)
+    if policy is not None:
+        close_rules(graph, logical_rules(policy))
     return graph
 
 
@@ -114,8 +172,11 @@ def probabilities(policy: Policy, view: Graph):
             names.update(fact)
     for family in policy.families.values():
         names.update(family.statuses)
-    for chain in policy.chains:
-        names.update((chain.target, chain.status))
+    rules = logical_rules(policy)
+    for premises, conclusion in rules:
+        for subject, predicate, value in [*premises, conclusion]:
+            names.add(predicate)
+            names.update(term for term in (subject, value) if not term.startswith("?"))
     symbols = {name: str(i) for i, name in enumerate(sorted(names))}
     lines = ["known(-1,-1,-1)."]
     for i, facts in enumerate(grouped.values()):
@@ -133,19 +194,36 @@ def probabilities(policy: Policy, view: Graph):
             for j, cutoff in enumerate(weights):
                 if cutoff <= weight:
                     lines.append(f"known({args}) :- seen({i},{j}).")
-    for chain in policy.chains:
-        c, target, status = (symbols[k] for k in (chain.conclusion, chain.target, chain.status))
-        lines.append(f"known(T,{c},S) :- known(D,{target},T), known(D,{status},S).")
+    for premises, conclusion in rules:
+        variables = {}
 
-    # Query only candidate subjects, not every vocabulary symbol.
-    targets = defaultdict(set)
+        def encode_atom(atom):
+            subject, predicate, value = atom
+
+            def term(item):
+                if item.startswith("?"):
+                    if item not in variables:
+                        variables[item] = f"V{len(variables)}"
+                    return variables[item]
+                return symbols[item]
+
+            return f"known({term(subject)},{symbols[predicate]},{term(value)})"
+        body = ", ".join(encode_atom(atom) for atom in premises)
+        lines.append(f"{encode_atom(conclusion)} :- {body}.")
+
+    # Discover all reachable subjects, including those reached only through inferred edges.
+    potential = Graph()
     for facts in grouped.values():
-        for subject, predicate, value in facts:
-            if predicate in policy.families:
-                targets[predicate].add(subject)
-            for chain in policy.chains:
-                if predicate == chain.target:
-                    targets[chain.conclusion].add(value)
+        for fact in facts:
+            potential.add(rdf_fact(fact))
+    close_rules(potential, rules)
+    targets = defaultdict(set)
+    for subject, predicate, _ in potential:
+        subject_text, predicate_text = str(subject), str(predicate)
+        if subject_text.startswith(str(E)) and predicate_text.startswith(str(P)):
+            family = predicate_text.removeprefix(str(P))
+            if family in policy.families:
+                targets[family].add(subject_text.removeprefix(str(E)))
     queries = {}
     for family, subjects in targets.items():
         for subject in subjects:

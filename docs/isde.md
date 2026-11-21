@@ -195,3 +195,11 @@ curl -s http://127.0.0.1:8001/v1/inbox/luis
 El detalle privado puede consultarse en `GET /v1/reviews/ejemplo-1?user=luis` cuando la API se inicia con `MOSAIC_OPERATOR_TOKEN` configurado y la petición incluye la cabecera `X-Mosaic-Operator-Token`. Las respuestas provisionales no actualizan el historial. Los reintentos con el mismo identificador de revisión y texto son idempotentes. Si cambia el contexto antes de entregar, se devuelve `context_changed` y el agente puede solicitar una nueva revisión. Se permiten dos reformulaciones.
 
 Claude debe extraer una cita literal para cada afirmación y evaluar si la respuesta cumple la tarea. Los hechos deben corresponder al vocabulario y contar con respaldo interno. También propone hipótesis desde la vista individual del destinatario. Una extracción incompleta o un error del proveedor impide la aprobación. Estos controles dependen de la calidad de extracción del modelo y las probabilidades no están calibradas. La API funciona como demo local para integraciones de confianza y la bandeja es local. La entrega por correo u otro servicio requiere un adaptador y autenticación.
+
+## Inferencias de varios niveles
+
+La política admite reglas positivas en `rules` además de las cadenas `chains` anteriores. Una regla contiene una o varias premisas en `when` y una conclusión en `then`. Cada una es un triple con sujeto, predicado y objeto. Una variable como `"?x"` vincula las mismas entidades entre premisas y conclusión. Las conclusiones intermedias se declaran en `vocabulary`. Solo las proposiciones que deben protegerse necesitan una entrada en `families`.
+
+Las reglas se aplican hasta alcanzar un punto fijo, tanto en el grafo interno como en la evaluación de lo que un destinatario podría deducir. ProbLog calcula cada conclusión protegida con sus fuentes compartidas, sin contar como evidencias independientes los pasos de la deducción. Para el ejemplo `a ⇒ b ⇒ c ⇒ d`, las reglas y comandos están en [inferencias-multinivel.md](inferencias-multinivel.md).
+
+Las reglas no generan individuos, no aceptan código Prolog y no infieren una negación por ausencia. La corrección de los resultados depende de que las reglas, fuentes y estimaciones estén bien modeladas. Todavía no se ha medido el rendimiento con grafos grandes.
