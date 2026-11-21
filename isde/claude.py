@@ -7,9 +7,9 @@ from datetime import date
 from pydantic import Field, ValidationError, model_validator
 
 from .privacy import rut_format_signals
-from .model import (Grade, Hypothesis, Id, INTRINSIC_FAMILY, Model, Observation, Policy, Probability,
+from .model import (Entity, Grade, Hypothesis, Id, INTRINSIC_FAMILY, Model, Observation, Policy, Probability,
                     RuleProposal, Triple, VocabularyProposal, intrinsic_family)
-from .prompts import ADVERSARIAL_PROMPT, INTERNAL_ONTOLOGY_PROMPT, SOURCE_COVERAGE_INSTRUCTION
+from .prompts import ADVERSARIAL_PROMPT, ENTITY_INSTRUCTION, INTERNAL_ONTOLOGY_PROMPT, PATH_PROMPT, SOURCE_COVERAGE_INSTRUCTION
 
 
 class Snippet(Model):
@@ -244,6 +244,7 @@ class UnrepresentedClaim(Model):
 
 
 class InternalSuggestions(Suggestions):
+    entities: list[Entity] = Field(default_factory=list, max_length=64)
     rules: list[RuleProposal] = Field(default_factory=list, max_length=32)
     vocabulary: list[VocabularyProposal] = Field(default_factory=list, max_length=32)
     has_factual_claims: bool = True
@@ -282,6 +283,20 @@ def assess_hypotheses(policy, text, graph_context, *, client=None, model=None, p
     return result.hypotheses
 
 
+class PathReading(Model):
+    relation: str = Field(min_length=1, max_length=200)
+    implies_goal: bool
+    confidence: Probability
+
+
+def read_path(policy, goal, sentences, *, client=None, model=None):
+    """Name the relation a reader could draw between the ends of a path; the guard stores it only as a rating."""
+    family = policy.families.get(goal[1])
+    context = {"camino": sentences, "desde": goal[0], "hasta": goal[2], "conclusion_protegida": list(goal),
+               "familia": family.description if family else None}
+    return _request(PATH_PROMPT, context, PathReading, client, model)
+
+
 def propose(policy: Policy, source: Source, grade: Grade | None = None, *, graph_context=None, client=None, model=None,
             internal_prompt=None, adversarial_prompt=None):
     """Discover new entities and facts from one supplied text; returned proposals await acceptance."""
@@ -314,6 +329,7 @@ def propose(policy: Policy, source: Source, grade: Grade | None = None, *, graph
                  "puedes identificarla con el origen de la fuente, sin confundirla con su destinatario. "
                  "Por ejemplo, una fuente que dice 'mi dirección es Roble 10' puede proponer el predicado "
                  "domicilio y un hecho con el valor normalizado roble_10, si la cita es exacta.")
+        role += " " + ENTITY_INSTRUCTION
     role += (" Usa identificadores canónicos en minúsculas y predicados del vocabulario o familias, "
              "incluyendo los nuevos que hayas propuesto cuando corresponda. Usa los estados definidos, "
              "salvo que any_value sea true. Devuelve una cita literal por triple.")
@@ -408,6 +424,11 @@ def propose(policy: Policy, source: Source, grade: Grade | None = None, *, graph
         effective = policy.model_copy(update={"vocabulary": {**policy.vocabulary,
                                       **{p.predicate: p.description for p in vocabulary}}})
     events = []
+    # A label is a name the source uses; an invented one would let the model rename nodes without evidence.
+    entities = [e for e in getattr(result, "entities", []) if e.label in source.text]
+    if entities:
+        events.append(Observation(origin=source.origin, at=source.at, resource=source.resource,
+                                  entities=entities, assessor=model_id(model)))
     if vocabulary:
         events.append(Observation(origin=source.origin, at=source.at, resource=source.resource,
                                   quote=source.text, vocabulary=vocabulary, assessor=model_id(model)))

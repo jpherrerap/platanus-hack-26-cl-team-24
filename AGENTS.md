@@ -14,7 +14,7 @@ isde demo                                 # caso ficticio en memoria
 ## Mapa
 
 - `isde/model.py`: contratos Pydantic (`Policy`, `Case`, `Observation`, `Batch`). `extra="forbid"`. Los IDs siguen `^[a-z][a-z0-9_]{0,95}$`.
-- `isde/graphs.py`: esquema OWL, roles vigentes por fecha, vista interna, vista del observador y probabilidades con ProbLog.
+- `isde/graphs.py`: esquema OWL, roles vigentes por fecha, vista interna, vista del observador, búsqueda de caminos entre los extremos de un secreto (`find_paths`, `explain`) y probabilidades con ProbLog.
 - `isde/guard.py`: `Guard` con SQLite. `observe` registra evidencia, `_decide` elige la alternativa y `run` confirma la entrega en una sola transacción. `inbox` es lo único que ve el destinatario.
 - `isde/claude.py`: `interpret` y `propose`. Claude responde con una herramienta forzada y el código valida cada resultado.
 - `isde/serve.py`: demo visual local (stdlib `http.server`, solo vista previa).

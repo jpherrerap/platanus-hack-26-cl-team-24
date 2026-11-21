@@ -5,7 +5,8 @@ from typing import TypedDict
 from langgraph.graph import END, START, StateGraph
 from pydantic import Field
 
-from .claude import Source, _request, assess_hypotheses, model_id, propose
+from .claude import Source, _request, assess_hypotheses, model_id, propose, read_path
+from .graphs import describe
 from .guard import Guard
 from .model import Clause, Hypothesis, Model, Observation, Option, Task, Triple
 from .prompts import DEFAULT_PROMPTS
@@ -42,6 +43,9 @@ class ClaudeAnalysis:
     def source(self, policy, source, grade, context):
         return propose(policy, source, grade, graph_context=context,
                        internal_prompt=self.prompts["ontology"], adversarial_prompt=self.prompts["adversary"])
+
+    def read_path(self, policy, goal, sentences):
+        return read_path(policy, goal, sentences)
 
 
 class SourceInput(Model):
@@ -192,6 +196,10 @@ def inspect_graph(guard: Guard, model: ClaudeAnalysis):
                 raise ValueError("Relación fuera de la política")
             if predicate in policy.families and not policy.families[predicate].accepts(value):
                 raise ValueError("Estado fuera de la política")
+        # The draft must name the same nodes as the history, or no path can cross from one to the other.
+        resolve = guard.resolver()
+        analysis = analysis.model_copy(update={"facts": [
+            item.model_copy(update={"fact": guard._canonical(item.fact, resolve, policy)}) for item in analysis.facts]})
         return {"analysis": analysis, "context": guard.model_context(state["user"], state["day"]),
                 "internal": guard.model_context(None, state["day"])}
 
@@ -201,6 +209,25 @@ def inspect_graph(guard: Guard, model: ClaudeAnalysis):
         for item in hypotheses:
             item.validate_source(policy, state["text"])
         return {"hypotheses": hypotheses}
+
+    def paths(state):
+        reader = getattr(model, "read_path", None)
+        if reader is None:
+            return {}
+        extra = [item.fact for item in state["analysis"].facts] + [h.claim for h in state["hypotheses"]]
+        # shortcut: reads at most 5 new paths per review; the rest keep policy.paths.weight until a later review.
+        pending = guard.unrated_paths(state["user"], state["day"], extra)[:5]
+        policy, labels, readings = guard.risk_policy(state["day"]), guard.labels(), []
+        for goal, path, key in pending:
+            try:
+                reading = reader(policy, goal, describe(path, labels))
+            except ValueError:
+                continue  # An unread path keeps the default weight; the review still runs.
+            readings.append((key, reading.relation, reading.confidence if reading.implies_goal else 0.))
+        if readings:
+            with guard.transaction():
+                guard.rate_paths(readings, model_id())
+        return {}
 
     def score(state):
         result, _ = score_candidate(guard, state)
@@ -214,10 +241,12 @@ def inspect_graph(guard: Guard, model: ClaudeAnalysis):
     graph = StateGraph(ReviewState)
     graph.add_node("extract", extract)
     graph.add_node("adversary", adversary)
+    graph.add_node("paths", paths)
     graph.add_node("score", score)
     graph.add_edge(START, "extract")
     graph.add_edge("extract", "adversary")
-    graph.add_edge("adversary", "score")
+    graph.add_edge("adversary", "paths")
+    graph.add_edge("paths", "score")
     graph.add_edge("score", END)
     return graph.compile()
 

@@ -101,12 +101,24 @@ Qué cubre:
 Qué supone o no cubre:
 
 - Confía en la integración: identidad, roles, directorio, catálogo de cláusulas y su correspondencia con hechos. Si esas entradas mienten, la decisión también.
-- Solo conoce las cadenas de deducción configuradas. Una inferencia que la política no describe no se detecta.
+- Las cadenas configuradas deciden por sí solas. Un camino sin regla entre los extremos de un secreto solo aporta un peso orientativo (`paths.weight`) hasta que Claude lo lee en una revisión semántica. Los caminos de más de `paths.max_length` aristas no se buscan.
 - La demo de catálogo reemplaza un borrador desconocido por una respuesta aprobada. La API semántica depende de la cobertura de extracción de Claude.
 - No modela colusión entre destinatarios, grupos ni correlación entre operaciones.
 - Las probabilidades dependen de pesos sin calibrar y de suponer independencia entre orígenes distintos.
 - `interpret` y `propose` envían a Anthropic la política y el texto de la fuente. Para una fuente interna también envían los hechos del grafo interno. Para una externa, solo lo atribuido a ese destinatario y sus roles.
 - No se ha medido el rendimiento con grafos grandes.
+
+## Grafo de relaciones y caminos
+
+Cada hecho es una arista `sujeto relación objeto` entre dos nodos. Un mismo par de nodos puede tener varias aristas, con distinto origen, destinatario o relación. Los estados de una familia protegida (`signed`, `yes`) son nodos de tipo `valor`: un camino puede terminar en ellos, pero no los atraviesa. Así, dos entidades que solo comparten un estado no quedan conectadas. Un nodo con más de `paths.max_degree` aristas tampoco sirve de puente.
+
+Una fuente interna puede declarar entidades con `id`, `type`, `label` y `aliases`. Antes de guardar un hecho, mosAIc resuelve cada mención a su nodo usando, en este orden, un alias declarado, el identificador exacto o el único identificador igual sin guiones bajos (`o_17` → `o17`). Un alias que ya nombra a otro nodo se descarta: dos nodos existentes nunca se fusionan. Claude recibe la lista de entidades en `ontology.entities` para reutilizar sus identificadores. Una etiqueta propuesta debe aparecer literalmente en la fuente.
+
+Para cada secreto del grafo interno, el evaluador busca en el grafo del destinatario, más el borrador, caminos de 2 a `paths.max_length` aristas entre sus dos extremos. Una arista directa con otra relación no cuenta como camino, salvo que una regla deduzca el secreto a partir de ella. Cada cambio en la traza incluye `paths`. Cada camino trae las aristas, una oración por arista (`text`), si una regla lo convierte en la conclusión (`rule`) y las relaciones nuevas que esas reglas deducen entre los extremos (`relations`). Esa es la lectura determinística.
+
+En ProbLog, un camino respaldado por una regla ya está cubierto. Un camino sin regla suma una vía con probabilidad `paths.weight` (0,4 por defecto) multiplicada por la de sus aristas. Con ese valor, dos aristas citadas quedan bajo el aumento por defecto. En la revisión semántica, Claude lee hasta cinco caminos nuevos por solicitud y responde qué relación podría deducir el destinatario, si implica el secreto y con qué confianza. Esa lectura reemplaza el peso por defecto de ese camino y se guarda en `path_ratings`. Para hacerlo, el camino y el secreto interno se envían a Anthropic.
+
+`GET /v1/graph?user=ana&day=2026-01-04`, con el encabezado `X-Mosaic-Operator-Token`, devuelve los nodos y las aristas del grafo de ese destinatario. Sin `user`, devuelve el grafo interno.
 
 ## API HTTP con reformulación del agente
 

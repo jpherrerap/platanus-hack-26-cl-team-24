@@ -12,11 +12,11 @@ from types import SimpleNamespace
 from unittest import mock
 
 from isde.cli import main
-from isde.claude import Card, Source, assess_hypotheses, interpret, propose
-from isde.graphs import V, observer_view, probabilities, rdf_fact
+from isde.claude import Card, Source, assess_hypotheses, interpret, propose, read_path
+from isde.graphs import V, explain, find_paths, observer_view, probabilities, rdf_fact, value_nodes
 from rdflib import RDF
 from isde.guard import Guard
-from isde.model import Assignment, Batch, Case, Clause, Hypothesis, Observation, Option, Policy, Task
+from isde.model import Assignment, Batch, Case, Clause, Entity, Hypothesis, Observation, Option, Policy, Task
 
 ROOT = Path(__file__).resolve().parents[1] / "examples"
 DAY = date(2026, 1, 4)
@@ -2014,3 +2014,126 @@ class SemanticApiTests(unittest.TestCase):
         self.assertEqual(client.get(url, headers={"X-Mosaic-Operator-Token":"incorrecto"}).status_code, 403)
         response = client.get(url, headers={"X-Mosaic-Operator-Token":"operator-demo-secret"})
         self.assertEqual((response.status_code, response.json()["status"]), (200, "approved"))
+
+
+class RelationGraphTests(unittest.TestCase):
+    def setUp(self):
+        data = Policy.load(ROOT / "policy.yaml").model_dump()
+        data["chains"] = []  # No declared rule: only the path can reveal the secret.
+        self.policy = Policy.model_validate(data)
+        self.g = Guard(":memory:", self.policy, Case.load(ROOT / "case.yaml"))
+        self.addCleanup(self.g.close)
+        self.g.observe([
+            Observation(origin="registro", at=DAY, facts=[LINK, SIGN, GOAL]),
+            Observation(origin="correo", at=DAY, user="ana", grade="cited", facts=[LINK]),
+        ])
+
+    def test_state_values_end_paths_but_never_bridge_entities(self):
+        facts = [LINK, SIGN, ("o99", "signature", "signed"), ("o99", "counterparty", "gammaai")]
+        blocked = value_nodes(self.policy, facts)
+        self.assertEqual(find_paths(facts, "betaai", "gammaai", max_length=4, max_degree=12, blocked=blocked), [])
+        self.assertEqual(find_paths(facts, "betaai", "signed", max_length=4, max_degree=12, blocked=blocked),
+                         [[LINK, SIGN]])
+
+    def test_path_without_rule_is_advisory_until_a_reading_rates_it(self):
+        first = self.g.run("ana", "record", DAY, draft="El expediente O-17 ya está firmado.")
+        self.assertEqual(first["action"], "allow")
+        change = first["attempts"][0]["changes"][0]
+        self.assertAlmostEqual(change["after"], .4 * .98 * .75)
+        self.assertEqual(change["paths"][0]["text"], ["o17 counterparty betaai", "o17 signature signed"])
+        self.assertFalse(change["paths"][0]["rule"])
+
+        [(goal, path, key)] = self.g.unrated_paths("ana", DAY, [SIGN])
+        self.assertEqual((goal, path), (GOAL, [LINK, SIGN]))
+        self.g.rate_paths([(key, "la oferta de BetaAI está firmada", .9)], "test")
+        self.assertEqual(self.g.unrated_paths("ana", DAY, [SIGN]), [])
+        second = self.g.run("ana", "record", DAY, draft="El expediente O-17 ya está firmado.")
+        self.assertEqual(second["action"], "review")
+        self.assertAlmostEqual(second["attempts"][0]["blocked"][0]["after"], .9 * .98 * .75)
+
+    def test_rule_backed_path_names_the_new_relation(self):
+        result = explain(Policy.load(ROOT / "policy.yaml"), [LINK, SIGN], GOAL, {"o17": "O-17"})
+        self.assertEqual(result[0]["text"], ["O-17 counterparty betaai", "O-17 signature signed"])
+        self.assertEqual((result[0]["rule"], result[0]["relations"]), (True, [list(GOAL)]))
+
+    def test_aliases_and_spelling_resolve_to_one_node(self):
+        self.g.observe([
+            Observation(origin="ficha", at=DAY, entities=[
+                Entity(id="o17", type="documento", label="O-17", aliases=["expediente_o17", "betaai"])]),
+            Observation(origin="nota", at=DAY, facts=[("expediente_o17", "deadline", "friday"),
+                                                       ("o_17", "deadline", "monday")]),
+        ])
+        facts = {f for _, f, _ in self.g.records("", DAY)}
+        self.assertIn(("o17", "deadline", "friday"), facts)
+        self.assertIn(("o17", "deadline", "monday"), facts)
+        # An alias already naming another node is ambiguous and never merges them.
+        self.assertNotIn("betaai", [a for e in self.g.model_context(None, DAY)["entities"] for a in e["aliases"]])
+        graph = self.g.graph("", DAY)
+        self.assertIn({"id": "o17", "type": "documento", "label": "O-17"}, graph["nodes"])
+        self.assertIn({"id": "signed", "type": "valor", "label": "signed"}, graph["nodes"])
+        self.assertEqual(len([e for e in graph["edges"] if e["source"] == "o17"]), 4)
+        with self.assertRaisesRegex(ValueError, "fuentes internas"):
+            Observation(origin="x", at=DAY, user="ana", grade="read", entities=[Entity(id="o17", label="O-17")])
+
+    def test_read_path_returns_validated_reading(self):
+        def create(**request):
+            self.context = json.loads(request["messages"][0]["content"])
+            block = SimpleNamespace(type="tool_use", name="select_evidence",
+                                    input={"relation": "BetaAI firmó", "implies_goal": True, "confidence": .8})
+            return SimpleNamespace(content=[block], stop_reason="tool_use")
+        client = SimpleNamespace(messages=SimpleNamespace(create=create))
+        reading = read_path(self.policy, GOAL, ["o17 counterparty betaai"], client=client)
+        self.assertEqual((reading.implies_goal, reading.confidence), (True, .8))
+        self.assertEqual(self.context["camino"], ["o17 counterparty betaai"])
+
+    def test_semantic_review_reads_new_paths_before_scoring(self):
+        from isde.semantic import DraftAssessment, inspect_graph
+        text = "El expediente O-17 ya está firmado."
+        reads = []
+
+        class Model:
+            def analyze(self, policy, text, question):
+                return DraftAssessment(facts=[{"fact": list(SIGN), "quote": text}],
+                                       covers_all_claims=True, fulfills_task=True)
+
+            def adversarial(self, policy, text, view):
+                return []
+
+            def read_path(self, policy, goal, sentences):
+                reads.append(sentences)
+                return SimpleNamespace(relation="la oferta de BetaAI está firmada", implies_goal=True, confidence=.9)
+
+        state = inspect_graph(self.g, Model()).invoke(
+            {"user": "ana", "task": "record", "question": "¿Está firmado?", "day": DAY, "text": text})
+        self.assertEqual(reads, [["o17 counterparty betaai", "o17 signature signed"]])
+        self.assertEqual(state["result"]["action"], "review")
+        self.assertEqual(self.g.unrated_paths("ana", DAY, [SIGN]), [])
+
+    def test_propose_keeps_only_entities_named_by_the_source(self):
+        text = "El expediente O-17 corresponde a BetaAI."
+        payload = {"items": [{"fact": list(LINK), "quote": text, "confidence": .9}],
+                   "entities": [{"id": "o17", "type": "documento", "label": "O-17", "aliases": ["expediente_o17"]},
+                                {"id": "betaai", "type": "organizacion", "label": "Beta Inc"}]}
+        def create(**request):
+            self.system = request["system"]
+            block = SimpleNamespace(type="tool_use", name="select_evidence", input=payload)
+            return SimpleNamespace(content=[block], stop_reason="tool_use")
+        client = SimpleNamespace(messages=SimpleNamespace(create=create))
+        events = propose(self.policy, Source(origin="ficha", at=DAY, text=text), client=client)
+        self.assertEqual([e.id for e in events[0].entities], ["o17"])
+        self.assertIn("ontology.entities", self.system)
+        self.g.observe(events)
+        self.assertEqual(self.g.labels()["o17"], "O-17")
+
+    def test_graph_endpoint_requires_operator(self):
+        from fastapi.testclient import TestClient
+        from isde.api import create_app
+        with tempfile.TemporaryDirectory() as folder, \
+                mock.patch.dict(os.environ, {"MOSAIC_OPERATOR_TOKEN": "operator"}, clear=True):
+            client = TestClient(create_app(db=str(Path(folder) / "api.sqlite")))
+            self.assertEqual(client.get("/v1/graph").status_code, 403)
+            response = client.get("/v1/graph", headers={"X-Mosaic-Operator-Token": "operator"})
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(set(response.json()), {"nodes", "edges"})
+            self.assertEqual(client.get("/v1/graph?user=nadie",
+                                        headers={"X-Mosaic-Operator-Token": "operator"}).status_code, 404)
