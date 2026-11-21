@@ -51,6 +51,9 @@ class Policy(Model):
 
     @model_validator(mode="after")
     def references(self):
+        # Reserve the same meanings in every deployment, including older YAML policies.
+        self.vocabulary.setdefault("personal_rut", "RUT/RUN de una persona o ficha, en formato rut_<cuerpo>_<dv>.")
+        self.vocabulary.setdefault("identifies_person", "Enlaza una ficha (sujeto) con su titular (objeto).")
         if set(self.evidence) != {"possible_access", "external_hint", "delivered", "read", "cited"}:
             raise ValueError("Faltan grados de evidencia")
         if not self.families:

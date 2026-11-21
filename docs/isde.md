@@ -77,3 +77,11 @@ finally:
 ```
 
 Esta versión entrega respuestas compuestas de cláusulas previamente asociadas a hechos y requisitos de tarea. Un borrador que coincide con una alternativa se evalúa primero. Para texto libre desconocido, el guardrail busca la respuesta de catálogo más corta que complete la tarea y pase la evaluación. El catálogo y su correspondencia entre texto y triples son entradas de confianza. El análisis semántico de borradores arbitrarios, los grupos de destinatarios y la correlación entre distintas operaciones quedan para próximas versiones.
+
+## RUT de personas
+
+Antes de entregar una respuesta, el canal general comprueba el texto final y los hechos asociados a sus cláusulas. Aplica la misma comprobación a las alternativas de reparación. Retiene valores con formato usual de RUT (cuerpo de siete u ocho cifras y dígito verificador válido), incluso sin etiqueta. Si el texto identifica expresamente el valor como RUT o RUN, también lo retiene con un verificador mal escrito. Un número de otro sistema que coincida con ese formato también puede pasar a revisión.
+
+El vocabulario de base incluye `personal_rut` para vincular una persona o ficha con el valor canónico `rut_<cuerpo>_<dv>`, y `identifies_person` para indicar la persona titular de una ficha. Si el destinatario ya pudo conocer el RUT de esa ficha, identificar a su titular también pasa a revisión. Una respuesta de ayuda, como indicar dónde hacer el trámite, puede entregarse si cumple los requisitos de la tarea. Los permisos para conocer otras familias de secretos siguen siendo independientes.
+
+Estas comprobaciones cubren valores literales y relaciones representadas en el grafo. Interpretar preguntas abiertas, alusiones libres o cifras repartidas entre varios mensajes requiere que la integración aporte los hechos correspondientes.
