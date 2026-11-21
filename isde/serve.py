@@ -134,7 +134,7 @@ def evaluate(guard: Guard, user, task, draft, request_id=None):
     # Context is captured before delivery, otherwise it would include the answer being judged.
     observer = guard.model_context(user, DAY)
     result = guard.run(user, task, DAY, request_id, draft=draft)
-    shown = draft or " ".join(guard.case.clauses[k].text for k in guard.case.tasks[task].options[0].clauses)
+    shown = draft or guard.render(guard.case.tasks[task].options[0])
     return {"user": user, "task": task, "draft": shown, **result, "observer": observer,
             "delivered": request_id is not None and result["action"] != "review", "inbox": guard.inbox(user)}
 

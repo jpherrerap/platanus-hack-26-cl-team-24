@@ -92,6 +92,9 @@ class Guard:
         hints = [{"fact": fact, "p_known": weight} for _, fact, weight in self.records(user, at)]
         return {"kind": "observer", "roles": roles, "possible_knowledge": hints}
 
+    def render(self, option):
+        return " ".join(self.case.clauses[key].text for key in option.clauses)
+
     def _decide(self, user, task_id, at, draft):
         if task_id not in self.case.tasks:
             raise ValueError(f"Tarea desconocida: {task_id}")
@@ -103,16 +106,13 @@ class Guard:
         attempts = []
         options = list(task.options)
         if draft is not None:
-            def render(option):
-                return " ".join(self.case.clauses[key].text for key in option.clauses)
-
             # Agents and shells add stray spaces or newlines; compare on normalized whitespace.
             wanted = " ".join(draft.split())
-            match = next((option for option in options if " ".join(render(option).split()) == wanted), None)
+            match = next((option for option in options if " ".join(self.render(option).split()) == wanted), None)
             if match is None:
                 attempts.append({"reason": "unmapped_draft"})
                 # For an unrecognized draft, try the shortest approved answer that completes the task.
-                options.sort(key=lambda option: len(render(option)))
+                options.sort(key=lambda option: len(self.render(option)))
             else:
                 options.remove(match)
                 options.insert(0, match)
@@ -154,8 +154,7 @@ class Guard:
                     blocked.append(entry)
             attempts.append({"changes": changes, "blocked": blocked})
             if not blocked:
-                text = " ".join(c.text for c in clauses)
-                decision = dict(action="allow" if len(attempts) == 1 else "repair", text=text, attempts=attempts)
+                decision = dict(action="allow" if len(attempts) == 1 else "repair", text=self.render(option), attempts=attempts)
                 return decision, exposed
         return dict(action="review", text=None, attempts=attempts), None
 

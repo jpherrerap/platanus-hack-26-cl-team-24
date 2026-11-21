@@ -88,10 +88,6 @@ def demo(guard, policy, case, history, as_json):
     guard.observe(Batch.load(history).observations)
     task = next(iter(case.tasks))
 
-    def proposal(name):
-        # The agent proposes the most useful catalog answer; ISDE decides what is actually delivered.
-        return " ".join(case.clauses[key].text for key in case.tasks[name].options[0].clauses)
-
     turns = [(task, at, list(dict.fromkeys(a.user for a in case.assignments)),
               "El agente propone el mismo borrador para todos:")]
     # Second turn, same answer to two vendors: only the one whose first delivery named BetaAI can combine it.
@@ -105,7 +101,8 @@ def demo(guard, policy, case, history, as_json):
         for name, family in policy.families.items():
             print(f"Conclusión protegida: {name}\n   {family.description.rstrip('.').lower()}")
     for number, (current, day, users, note) in enumerate(turns, 1):
-        draft = proposal(current)
+        # The agent proposes the most useful catalog answer; ISDE decides what is actually delivered.
+        draft = guard.render(case.tasks[current].options[0])
         if not as_json:
             print("\n" + paint(f"Turno {number} · {day.isoformat()} · tarea «{current}» · piden: {', '.join(users)}",
                                "1") + f"\n{note}\n   «{draft}»")
