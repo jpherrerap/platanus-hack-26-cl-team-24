@@ -8,7 +8,7 @@ from datetime import date
 from rdflib import RDF
 
 from .graphs import E, P, R, V, internal_view, make_schema, observer_view, probabilities, rdf_fact, role_graph, user_grants
-from .model import Case, Observation, Policy
+from .model import Case, Observation, ObserverEstimate, Policy
 from .privacy import RutProtection
 
 
@@ -20,18 +20,19 @@ class Guard:
             raise ValueError("Rol del directorio desconocido")
         self.schema = make_schema(policy)
         self.scope = (case.org, case.operation)
-        try:
-            self.db = sqlite3.connect(db, isolation_level=None, timeout=15)
-            self.db.executescript("""
-                CREATE TABLE IF NOT EXISTS evidence (
-                    org TEXT, op TEXT, audience TEXT, origin TEXT, fact TEXT, day TEXT,
-                    grade TEXT, cap REAL, quote TEXT, PRIMARY KEY(org, op, audience, origin, fact, day, grade));
-                CREATE TABLE IF NOT EXISTS deliveries (
-                    org TEXT, op TEXT, audience TEXT, request_id TEXT, task TEXT, draft_hash TEXT, day TEXT,
-                    decision TEXT, PRIMARY KEY(org, op, audience, request_id));
-            """)
-        except sqlite3.Error as exc:
-            raise ValueError(f"No se puede abrir la base de datos {db}") from exc
+        self.db = sqlite3.connect(db, isolation_level=None, timeout=15)
+        self.db.executescript("""
+            CREATE TABLE IF NOT EXISTS evidence (
+                org TEXT, op TEXT, audience TEXT, origin TEXT, fact TEXT, day TEXT,
+                grade TEXT, cap REAL, quote TEXT, PRIMARY KEY(org, op, audience, origin, fact, day, grade));
+            CREATE TABLE IF NOT EXISTS interpretations (
+                org TEXT, op TEXT, audience TEXT, origin TEXT, claim TEXT, day TEXT, grade TEXT,
+                cap REAL, p_if_seen REAL, quote TEXT, assessor TEXT,
+                PRIMARY KEY(org, op, audience, origin, claim, day, grade, quote, assessor));
+            CREATE TABLE IF NOT EXISTS deliveries (
+                org TEXT, op TEXT, audience TEXT, request_id TEXT, task TEXT, draft_hash TEXT, day TEXT,
+                decision TEXT, PRIMARY KEY(org, op, audience, request_id));
+        """)
 
     @contextmanager
     def transaction(self):
@@ -53,6 +54,24 @@ class Guard:
             DO UPDATE SET cap=max(cap,excluded.cap), quote=coalesce(excluded.quote,quote)
         """, [(*self.scope, user, origin, json.dumps(f), at.isoformat(), grade, cap, quote) for f in facts])
 
+    def _record_hypothesis(self, user, origin, at, grade, cap, hypothesis, assessor):
+        self.db.execute("""
+            INSERT INTO interpretations VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(org,op,audience,origin,claim,day,grade,quote,assessor)
+            DO UPDATE SET p_if_seen=excluded.p_if_seen, cap=excluded.cap
+        """, (*self.scope, user, origin, json.dumps(hypothesis.claim), at.isoformat(),
+              grade, cap, hypothesis.p_if_seen, hypothesis.quote, assessor))
+
+    def hypotheses(self, user, at):
+        rows = self.db.execute("""
+            SELECT origin,claim,day,grade,cap,p_if_seen,quote,assessor FROM interpretations
+            WHERE org=? AND op=? AND audience=? AND day<=? ORDER BY rowid
+        """, (*self.scope, user, at.isoformat()))
+        return [ObserverEstimate(origin=origin, claim=json.loads(claim), at=day, quote=quote,
+                                 assessor=assessor, p_if_seen=conditional,
+                                 p_seen=min(cap, self.policy.evidence[grade]))
+                for origin, claim, day, grade, cap, conditional, quote, assessor in rows]
+
     def observe(self, observations: list[Observation]):
         with self.transaction():
             for event in observations:
@@ -67,6 +86,11 @@ class Guard:
                     readable, _ = user_grants(self.policy, roles, event.user)
                     if event.resource not in readable:
                         continue
+                for hypothesis in event.hypotheses:
+                    hypothesis.validate_source(self.policy, event.quote)
+                    self._record_hypothesis(event.user, "src:" + event.origin, event.at, event.grade,
+                                            1. if event.confidence is None else event.confidence,
+                                            hypothesis, event.assessor)
                 self._record(event.user or "", "src:" + event.origin, event.facts, event.at,
                              event.grade or "internal", 1. if event.confidence is None else event.confidence,
                              event.quote)
@@ -91,12 +115,13 @@ class Guard:
         roles = sorted({name for assignment in access.subjects(V.user, E[user])
                         for name in self.policy.roles if (assignment, RDF.type, R[name]) in access})
         hints = [{"fact": fact, "p_known": weight} for _, fact, weight in self.records(user, at)]
-        return {"kind": "observer", "roles": roles, "possible_knowledge": hints}
+        estimates = [h.model_dump(mode="json") for h in self.hypotheses(user, at)]
+        return {"kind": "observer", "roles": roles, "possible_knowledge": hints, "hypotheses": estimates}
 
     def render(self, option):
         return " ".join(self.case.clauses[key].text for key in option.clauses)
 
-    def _decide(self, user, task_id, at, draft, *, strict=False):
+    def _decide(self, user, task_id, at, draft, assessments, assessor, *, strict=False):
         if task_id not in self.case.tasks:
             raise ValueError(f"Tarea desconocida: {task_id}")
         task = self.case.tasks[task_id]
@@ -104,21 +129,20 @@ class Guard:
         private = internal_view(self.schema, private_facts)
         records = self.records(user, at)
         rut_protection = RutProtection(private_facts, records)
-        baseline = probabilities(self.policy, observer_view(records))
+        historical = self.hypotheses(user, at)
+        baseline = probabilities(self.policy, observer_view(records, historical))
         _, allowed = user_grants(self.policy, role_graph(self.schema, self.case, at), user)
         attempts = []
         options = list(task.options)
         if draft is not None:
-            # Agents and shells add stray spaces or newlines; compare on normalized whitespace.
             wanted = " ".join(draft.split())
-            match = next((option for option in options if " ".join(self.render(option).split()) == wanted), None)
+            match = next((o for o in options if " ".join(self.render(o).split()) == wanted), None)
             if strict and match is None:
-                return dict(action="review", text=None, attempts=[{"reason": "unmapped_draft"}]), None
+                return {"action": "review", "text": None, "attempts": [{"reason": "unmapped_draft"}]}, None
             if strict:
                 options = [match]
             elif match is None:
                 attempts.append({"reason": "unmapped_draft"})
-                # For an unrecognized draft, try the shortest approved answer that completes the task.
                 options.sort(key=lambda option: len(self.render(option)))
             else:
                 options.remove(match)
@@ -142,12 +166,22 @@ class Guard:
                 continue
             # A repeated disclosure of the same facts shares one exposure origin.
             exposed = []
+            clause_origins = {}
             for clause in clauses:
                 payload = json.dumps(sorted(clause.facts), separators=(",", ":"))
-                origin = "out:" + hashlib.sha256(payload.encode()).hexdigest()
+                origin = "out:" + hashlib.sha256((payload if clause.facts else clause.text).encode()).hexdigest()
+                clause_origins[clause.text] = origin
                 exposed.extend((origin, fact, self.policy.evidence["delivered"]) for fact in clause.facts)
             possible = records + exposed
-            after = probabilities(self.policy, observer_view(possible))
+            projected = []
+            for hypothesis in assessments.get(text, []):
+                origin = next((source for clause_text, source in clause_origins.items()
+                               if hypothesis.quote in clause_text), None)
+                if origin is None:
+                    origin = "out-text:" + hashlib.sha256(text.encode()).hexdigest()
+                projected.append(ObserverEstimate(**hypothesis.model_dump(), origin=origin,
+                                                  at=at, assessor=assessor, p_seen=self.policy.evidence["delivered"]))
+            after = probabilities(self.policy, observer_view(possible, historical + projected))
             blocked, changes = [], []
             for goal, posterior in sorted(after.items()):
                 subject, family, status = goal
@@ -164,41 +198,73 @@ class Guard:
                     changes.append(entry)
                 if direct or (delta > 1e-9 and (posterior >= rule.absolute or delta >= rule.increase)):
                     blocked.append(entry)
-            attempts.append({"changes": changes, "blocked": blocked})
+            attempt = {"changes": changes, "blocked": blocked}
+            if projected:
+                attempt["hypotheses"] = [h.model_dump(mode="json") for h in projected]
+            attempts.append(attempt)
             if not blocked:
-                decision = dict(action="allow" if len(attempts) == 1 else "repair", text=self.render(option), attempts=attempts)
-                return decision, exposed
+                decision = dict(action="allow" if len(attempts) == 1 else "repair", text=text, attempts=attempts)
+                return decision, (exposed, projected)
         return dict(action="review", text=None, attempts=attempts), None
 
+    def _previous(self, user, request_id, task, draft_hash):
+        if request_id is None:
+            return None
+        previous = self.db.execute("""
+            SELECT task,draft_hash,decision FROM deliveries
+            WHERE org=? AND op=? AND audience=? AND request_id=?
+        """, (*self.scope, user, request_id)).fetchone()
+        if previous:
+            if previous[:2] != (task, draft_hash):
+                raise ValueError("Identificador de entrega reutilizado para otra solicitud")
+            return json.loads(previous[2])
+
     def run(self, user: str, task: str, at: date, request_id: str | None = None, *, draft: str | None = None,
-            strict=False, request_fingerprint: str | None = None, rewritten=False):
+            assess=False, client=None, model=None, strict=False, request_fingerprint=None, rewritten=False):
         if not user or not task or (request_id is not None and not request_id.strip()):
             raise ValueError("Destinatario, tarea o identificador vacío")
-        # A typo would otherwise start a fresh, empty history for a recipient that does not exist.
         if user not in {a.user for a in self.case.assignments if (a.org, a.operation) == self.scope}:
             raise ValueError(f"Destinatario fuera del directorio: {user}")
         draft_hash = request_fingerprint or (hashlib.sha256(draft.encode()).hexdigest() if draft is not None else None)
-        with self.transaction():
-            if request_id is not None:
-                previous = self.db.execute("""
-                    SELECT task,draft_hash,decision FROM deliveries
-                    WHERE org=? AND op=? AND audience=? AND request_id=?
-                """, (*self.scope, user, request_id)).fetchone()
+        assessments, context, assessor = {}, None, None
+        if assess or self.policy.assess_drafts:
+            from .claude import assess_hypotheses, model_id
+            with self.transaction():
+                previous = self._previous(user, request_id, task, draft_hash)
                 if previous:
-                    if previous[:2] != (task, draft_hash):
-                        raise ValueError("Identificador de entrega reutilizado para otra solicitud")
-                    return json.loads(previous[2])
+                    return previous
+                context = self.model_context(user, at)
+            assessor = model_id(model)
+            for option in self.case.tasks[task].options:
+                text = " ".join(self.case.clauses[key].text for key in option.clauses)
+                if text in assessments:
+                    continue
+                try:
+                    assessments[text] = assess_hypotheses(self.policy, text, context, client=client, model=assessor)
+                except Exception:
+                    # A provider outage or malformed assessment leaves the inbox untouched.
+                    return {"action": "review", "text": None, "attempts": [{"reason": "assessment_unavailable"}]}
+        with self.transaction():
+            previous = self._previous(user, request_id, task, draft_hash)
+            if previous:
+                return previous
+            if context is not None and context != self.model_context(user, at):
+                return {"action": "review", "text": None, "attempts": [{"reason": "observer_context_changed"}]}
+            if request_id is not None:
                 latest = self.db.execute("SELECT max(day) FROM deliveries WHERE org=? AND op=? AND audience=?",
                                          (*self.scope, user)).fetchone()[0]
                 if latest and at.isoformat() < latest:
                     raise ValueError("Una entrega nueva debe respetar el orden del historial")
-            result, exposure = self._decide(user, task, at, draft, strict=strict)
+            result, exposure = self._decide(user, task, at, draft, assessments, assessor, strict=strict)
             if rewritten and result["action"] == "allow":
                 result["action"] = "repair"
-            # A review is recorded too, so a retry returns it and the id cannot be reused for another request.
             if request_id is not None:
-                for origin, fact, _ in exposure or []:
-                    self._record(user, origin, [fact], at, "delivered")
+                if exposure is not None:
+                    exposed, projections = exposure
+                    for h in projections:
+                        self._record_hypothesis(user, h.origin, at, "delivered", 1., h, assessor)
+                    for origin, fact, _ in exposed:
+                        self._record(user, origin, [fact], at, "delivered")
                 self.db.execute("INSERT INTO deliveries VALUES (?,?,?,?,?,?,?,?)",
                                 (*self.scope, user, request_id, task, draft_hash, at.isoformat(), json.dumps(result)))
             return result
@@ -208,5 +274,4 @@ class Guard:
             SELECT request_id,decision FROM deliveries
             WHERE org=? AND op=? AND audience=? ORDER BY rowid
         """, (*self.scope, user))
-        # Reviewed requests are recorded without text; the recipient never sees them.
         return [{"id": key, "text": text} for key, raw in rows if (text := json.loads(raw)["text"]) is not None]

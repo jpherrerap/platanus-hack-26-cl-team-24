@@ -65,6 +65,7 @@ class Policy(Model):
     vocabulary: dict[Id, str]
     families: dict[Id, Family]
     chains: list[Chain]
+    assess_drafts: bool = False
 
     @model_validator(mode="after")
     def references(self):
@@ -146,9 +147,33 @@ class Case(Scope):
         return self
 
 
+class Hypothesis(Model):
+    claim: Triple
+    quote: str = Field(min_length=1)
+    p_if_seen: Probability
+
+    def validate_source(self, policy, text):
+        _, predicate, value = self.claim
+        if not self.quote.strip() or self.quote not in text:
+            raise ValueError("La hipótesis requiere una cita literal de la fuente visible")
+        if predicate not in policy.vocabulary and predicate not in policy.families:
+            raise ValueError("Predicado de hipótesis desconocido")
+        if predicate in policy.families and value not in policy.families[predicate].statuses:
+            raise ValueError("Estado de hipótesis desconocido")
+
+
+class ObserverEstimate(Hypothesis):
+    origin: str
+    at: date
+    p_seen: Probability
+    assessor: str
+
+
 class Observation(Model):
     origin: Id  # Stable identity of the underlying evidence, including copies.
-    facts: Annotated[list[Triple], Field(min_length=1)]
+    facts: list[Triple] = []
+    hypotheses: list[Hypothesis] = []
+    assessor: str = "adapter"
     at: date
     user: Id | None = None  # None is internal only.
     grade: Grade | None = None
@@ -158,11 +183,15 @@ class Observation(Model):
 
     @model_validator(mode="after")
     def audience(self):
+        if not self.facts and not self.hypotheses:
+            raise ValueError("La observación está vacía")
+        if self.hypotheses and (self.user is None or not self.quote):
+            raise ValueError("Las hipótesis requieren destinatario y texto visible")
         if (self.user is None) != (self.grade is None):
             raise ValueError("Especifica destinatario y grado juntos")
         if self.grade == "possible_access" and self.resource is None:
             raise ValueError("Falta el recurso del permiso")
-        if self.grade == "external_hint" and self.confidence is None:
+        if self.grade == "external_hint" and self.confidence is None and self.facts:
             raise ValueError("Una hipótesis requiere una estimación de conocimiento")
         if self.user is None and self.confidence is not None:
             raise ValueError("La confianza de acceso pertenece a un observador")

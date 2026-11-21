@@ -69,7 +69,7 @@ def internal_view(schema, facts):
     return graph
 
 
-def observer_view(records):
+def observer_view(records, hypotheses=()):
     # Keep "possibly known" statements qualified by source, never as asserted truth.
     graph = Graph()
     for origin, fact, weight in records:
@@ -78,6 +78,20 @@ def observer_view(records):
         for prop, term in zip((RDF.subject, RDF.predicate, RDF.object), rdf_fact(fact)):
             graph.add((node, prop, term))
         graph.add((node, V.origin, Literal(origin)))
+        graph.add((node, V.weight, Literal(weight)))
+    for estimate in hypotheses:
+        node = BNode()
+        graph.add((node, RDF.type, RDF.Statement))
+        graph.add((node, RDF.type, V.Interpretation))
+        for prop, term in zip((RDF.subject, RDF.predicate, RDF.object), rdf_fact(estimate.claim)):
+            graph.add((node, prop, term))
+        graph.add((node, V.origin, Literal(estimate.origin)))
+        graph.add((node, V.quote, Literal(estimate.quote)))
+        graph.add((node, V.date, Literal(estimate.at)))
+        graph.add((node, V.assessor, Literal(estimate.assessor)))
+        graph.add((node, V.pIfSeen, Literal(estimate.p_if_seen)))
+        graph.add((node, V.pSeen, Literal(estimate.p_seen)))
+        weight = Decimal(str(estimate.p_seen)) * Decimal(str(estimate.p_if_seen))
         graph.add((node, V.weight, Literal(weight)))
     return graph
 
