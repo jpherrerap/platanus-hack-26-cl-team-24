@@ -29,6 +29,12 @@ Las premisas de una regla se combinan con Y. Se pueden declarar varias reglas co
 
 Las cadenas históricas de `chains` siguen siendo válidas y pueden combinarse con `rules`. OWL RL expande las relaciones del esquema. Las reglas positivas adicionales cierran el grafo interno, y ProbLog las usa junto con la evidencia del destinatario. Las derivaciones no se registran como fuentes independientes. Una misma pista utilizada por dos caminos conserva su dependencia.
 
+## Prompt de la vista adversarial
+
+El prompt general está en `isde/prompts.py` y se usa al interpretar una tarjeta externa, proponer hechos de una fuente externa y evaluar un borrador. Pide explorar combinaciones, reglas encadenadas, interpretaciones alternativas y conocimiento adicional posible desde la vista de cada destinatario. El grafo interno y las vistas de otros destinatarios no se envían como contexto.
+
+La salida actual son hipótesis con un triple del vocabulario de la política, una cita literal y `p_if_seen`: la estimación de que el destinatario alcance esa interpretación si ve el texto. No es la probabilidad de verdad ni una estimación calibrada. El sistema valida el esquema, los predicados y la cita; esto no garantiza que una inferencia del modelo sea correcta o completa. Las hipótesis no agregan reglas nuevas a la política. La construcción automática de reglas, la detección de conocimientos sin relación con el texto analizado y la explicación completa de cada cadena siguen pendientes.
+
 ## Ejecutar las pruebas
 
 ```bash
