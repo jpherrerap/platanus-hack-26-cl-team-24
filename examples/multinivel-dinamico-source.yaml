@@ -1,0 +1,6 @@
+origin: relaciones_artificiales
+at: 2026-01-01
+text: >-
+  Para todo objeto, si tiene la propiedad a, entonces tiene la propiedad b.
+  Para todo objeto, si tiene la propiedad b, entonces tiene la propiedad c.
+  Para todo objeto, si tiene la propiedad c, entonces tiene la propiedad d.

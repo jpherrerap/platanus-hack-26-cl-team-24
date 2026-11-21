@@ -33,7 +33,27 @@ Las cadenas históricas de `chains` siguen siendo válidas y pueden combinarse c
 
 El prompt general está en `isde/prompts.py` y se usa al interpretar una tarjeta externa, proponer hechos de una fuente externa y evaluar un borrador. Pide explorar combinaciones, reglas encadenadas, interpretaciones alternativas y conocimiento adicional posible desde la vista de cada destinatario. El grafo interno y las vistas de otros destinatarios no se envían como contexto.
 
-La salida actual son hipótesis con un triple del vocabulario de la política, una cita literal y `p_if_seen`: la estimación de que el destinatario alcance esa interpretación si ve el texto. No es la probabilidad de verdad ni una estimación calibrada. El sistema valida el esquema, los predicados y la cita; esto no garantiza que una inferencia del modelo sea correcta o completa. Las hipótesis no agregan reglas nuevas a la política. La construcción automática de reglas, la detección de conocimientos sin relación con el texto analizado y la explicación completa de cada cadena siguen pendientes.
+La salida actual son hipótesis con un triple del vocabulario de la política, una cita literal y `p_if_seen`: la estimación de que el destinatario alcance esa interpretación si ve el texto. No es la probabilidad de verdad ni una estimación calibrada. El sistema valida el esquema, los predicados y la cita; esto no garantiza que una inferencia del modelo sea correcta o completa. Las hipótesis adversariales no agregan reglas nuevas a la política.
+
+## Construcción progresiva desde fuentes
+
+El prompt interno en `isde/prompts.py` pide hechos explícitos y propone reglas expresadas en la fuente. Cada regla contiene `when`, `then`, una cita literal y una confianza de extracción. El validador exige variables ligadas, predicados existentes, estados válidos, identificadores seguros y una cita que aparezca en la fuente. No interpreta código Prolog entregado por el modelo. Estas verificaciones no prueban que la regla capture correctamente el significado de la cita.
+
+Las propuestas se muestran antes de aceptarlas, junto con su fuente, fecha, cita, confianza y modelo. Una fuente aceptada registra todo el lote en una transacción. Para evaluar el riesgo, mosAIc considera conservadoramente que el destinatario **podría** conocer las reglas propuestas, aun cuando no tenga una evidencia específica de conocerlas. Las añade al razonamiento formal con peso 1; la confianza del modelo queda registrada como metadato y **no** se multiplica por la probabilidad de conocimiento. El cálculo de ProbLog mantiene las probabilidades de acceso a las pistas, sujetas a esta suposición conservadora.
+
+Las consecuencias de reglas propuestas aparecen en `possible_inferences` de la vista interna; no se consideran hechos confirmados para verificar una respuesta. La vista adversarial del modelo no recibe las reglas propuestas internamente ni el grafo privado; el motor sí las usa para calcular el riesgo. Incorporar reglas cambia el contexto de cualquier revisión previa, que debe evaluarse de nuevo antes de la entrega.
+
+Para ensayar con Claude y el caso artificial, instala el extra `claude`, configura `ANTHROPIC_API_KEY` y ejecuta:
+
+```bash
+mosaic --policy examples/multinivel-dinamico-policy.yaml --case examples/multinivel-case.yaml --db dinamico.sqlite load examples/multinivel-history.yaml
+mosaic --policy examples/multinivel-dinamico-policy.yaml --case examples/multinivel-case.yaml --db dinamico.sqlite propose examples/multinivel-dinamico-source.yaml > propuestas.json
+cat propuestas.json
+mosaic --policy examples/multinivel-dinamico-policy.yaml --case examples/multinivel-case.yaml --db dinamico.sqlite load propuestas.json
+mosaic --policy examples/multinivel-dinamico-policy.yaml --case examples/multinivel-case.yaml --db dinamico.sqlite preview ana show_a --at 2026-01-01 --draft a
+```
+
+Si Claude identifica las tres reglas en la fuente, el último comando deja `a` en revisión porque conduce a `d`. La extracción puede variar: revisa `propuestas.json` antes de cargarlo. La API `/v1/sources` también permite obtener propuestas con `accept: false` e incorporarlas con `accept: true`; cada llamada analiza nuevamente la fuente. El vocabulario y las familias deben existir en la política; todavía no se incorporan predicados ni categorías sensibles nuevas automáticamente. La detección de conocimientos sin relación con el texto analizado y la explicación completa de cada cadena siguen pendientes.
 
 ## Ejecutar las pruebas
 

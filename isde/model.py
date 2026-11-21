@@ -72,6 +72,26 @@ class Rule(Model):
             raise ValueError("Las variables de la conclusión deben aparecer en las premisas")
         return self
 
+    def validate_policy(self, policy):
+        predicates = policy.vocabulary.keys() | policy.families.keys()
+        for _, predicate, value in [*self.when, self.then]:
+            if predicate not in predicates:
+                raise ValueError("Predicado sin definición")
+            if predicate in policy.families and not value.startswith("?"):
+                if value not in policy.families[predicate].statuses:
+                    raise ValueError("Estado fuera de la familia protegida")
+
+
+class RuleProposal(Model):
+    rule: Rule
+    quote: str = Field(min_length=1)
+    confidence: Probability
+
+    def validate_source(self, policy, text):
+        if not text or not self.quote.strip() or self.quote not in text:
+            raise ValueError("La regla requiere una cita literal de la fuente")
+        self.rule.validate_policy(policy)
+
 
 class Policy(Model):
     version: Literal[1]
@@ -108,12 +128,7 @@ class Policy(Model):
             if {chain.target, chain.status, chain.conclusion} - predicates:
                 raise ValueError("Predicado sin definición")
         for rule in self.rules:
-            for _, predicate, value in [*rule.when, rule.then]:
-                if predicate not in predicates:
-                    raise ValueError("Predicado sin definición")
-                if predicate in self.families and not value.startswith("?"):
-                    if value not in self.families[predicate].statuses:
-                        raise ValueError("Estado fuera de la familia protegida")
+            rule.validate_policy(self)
         for family in self.families.values():
             if len(set(family.statuses)) != len(family.statuses):
                 raise ValueError("Estados repetidos")
@@ -193,6 +208,7 @@ class Observation(Model):
     origin: Id  # Stable identity of the underlying evidence, including copies.
     facts: list[Triple] = []
     hypotheses: list[Hypothesis] = []
+    rules: list[RuleProposal] = Field(default_factory=list, max_length=32)
     assessor: str = "adapter"
     at: date
     user: Id | None = None  # None is internal only.
@@ -203,8 +219,10 @@ class Observation(Model):
 
     @model_validator(mode="after")
     def audience(self):
-        if not self.facts and not self.hypotheses:
+        if not self.facts and not self.hypotheses and not self.rules:
             raise ValueError("La observación está vacía")
+        if self.rules and (self.user is not None or not self.quote):
+            raise ValueError("Las reglas propuestas requieren fuente interna con cita")
         if self.hypotheses and (self.user is None or not self.quote):
             raise ValueError("Las hipótesis requieren destinatario y texto visible")
         if (self.user is None) != (self.grade is None):

@@ -6,8 +6,8 @@ from datetime import date
 from pydantic import Field, ValidationError, model_validator
 
 from .privacy import rut_format_signals
-from .model import Grade, Hypothesis, Id, Model, Observation, Policy, Probability, Triple
-from .prompts import ADVERSARIAL_PROMPT
+from .model import Grade, Hypothesis, Id, Model, Observation, Policy, Probability, RuleProposal, Triple
+from .prompts import ADVERSARIAL_PROMPT, INTERNAL_ONTOLOGY_PROMPT
 
 
 class Snippet(Model):
@@ -176,6 +176,10 @@ class Suggestions(Model):
     items: list[SuggestedFact] = Field(max_length=64)
 
 
+class InternalSuggestions(Suggestions):
+    rules: list[RuleProposal] = Field(default_factory=list, max_length=32)
+
+
 class ObserverSuggestions(Suggestions):
     items: list[SuggestedFact] = Field(default_factory=list, max_length=64)
     hypotheses: list[Hypothesis] = Field(default_factory=list, max_length=32)
@@ -203,14 +207,15 @@ def propose(policy: Policy, source: Source, grade: Grade | None = None, *, graph
     """Discover new entities and facts from one supplied text; returned proposals await acceptance."""
     if (source.user is None) != (grade is None):
         raise ValueError("Una fuente externa requiere un grado")
-    role = "Extrae en items únicamente triples explícitos de esta fuente."
+    role = INTERNAL_ONTOLOGY_PROMPT
     context = {"policy": policy.model_dump(), "ontology": graph_context, "text": source.text,
                "grade": grade, "resource": source.resource}
-    schema = Suggestions
+    schema = InternalSuggestions
     if source.user is not None:
         context["ontology"] = observer_context(graph_context)
         context["formato_numerico"] = rut_format_signals(source.text)
-        role += " En items, confidence estima que el observador conozca la afirmación explícita. " + OBSERVER_ROLE
+        role = "Extrae en items únicamente triples explícitos de esta fuente. "
+        role += "En items, confidence estima que el observador conozca la afirmación explícita. " + OBSERVER_ROLE
         schema = ObserverSuggestions
     result = _request(role + " Usa identificadores canónicos en minúsculas y predicados del vocabulario "
                       "o familias. Conserva los estados definidos. Devuelve una cita literal por triple.",
@@ -225,6 +230,11 @@ def propose(policy: Policy, source: Source, grade: Grade | None = None, *, graph
         events.append(Observation(origin=source.origin, at=source.at, user=source.user, grade=grade,
                                   facts=[(subject, predicate, value)], quote=item.quote, resource=source.resource,
                                   confidence=item.confidence if source.user else None))
+    if source.user is None and result.rules:
+        for proposal in result.rules:
+            proposal.validate_source(policy, source.text)
+        events.append(Observation(origin=source.origin, at=source.at, resource=source.resource, quote=source.text,
+                                  rules=result.rules, assessor=model_id(model)))
     if source.user and result.hypotheses:
         for hypothesis in result.hypotheses:
             hypothesis.validate_source(policy, source.text)
