@@ -12,7 +12,7 @@ Límites de esta versión: las respuestas salen de un catálogo de cláusulas vi
 
 ## Probar la demo
 
-[Descargar ISDE para Python 3.11 o posterior](https://github.com/platanus-hack/platanus-hack-26-cl-team-24/archive/03b468b61483cf79a023f34339c608af84150529.zip). Descomprime el ZIP y abre una terminal en la carpeta que contiene `pyproject.toml`. Ejecuta estos comandos en macOS o Linux.
+[Descargar ISDE para Python 3.11 o posterior](https://github.com/platanus-hack/platanus-hack-26-cl-team-24/archive/refs/heads/main.zip). Descomprime el ZIP y abre una terminal en la carpeta que contiene `pyproject.toml`. Ejecuta estos comandos en macOS o Linux.
 
 ```bash
 python3 -m venv .venv

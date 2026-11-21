@@ -2,5 +2,5 @@
   "project-name": "ISDE",
   "project-oneliner-spanish": "Evita que una respuesta de un agente revele un secreto al combinarse con pistas previas.",
   "project-description-spanish": "ISDE evalúa qué podría deducir cada destinatario al combinar una respuesta con lo que ya conoce. Usa el rol, los permisos y el historial para decidir si entrega el borrador, lo reformula o lo deriva a revisión, manteniendo la información que la persona necesita para su tarea.",
-  "deploy-url": "https://github.com/platanus-hack/platanus-hack-26-cl-team-24/archive/03b468b61483cf79a023f34339c608af84150529.zip"
+  "deploy-url": "https://github.com/platanus-hack/platanus-hack-26-cl-team-24/archive/refs/heads/main.zip"
 }
