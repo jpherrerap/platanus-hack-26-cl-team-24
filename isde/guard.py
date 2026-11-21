@@ -9,6 +9,7 @@ from rdflib import RDF
 
 from .graphs import E, P, R, V, internal_view, make_schema, observer_view, probabilities, rdf_fact, role_graph, user_grants
 from .model import Case, Observation, Policy
+from .privacy import RutProtection
 
 
 class Guard:
@@ -99,8 +100,10 @@ class Guard:
         if task_id not in self.case.tasks:
             raise ValueError(f"Tarea desconocida: {task_id}")
         task = self.case.tasks[task_id]
-        private = internal_view(self.schema, (f for _, f, _ in self.records("", at)))
+        private_facts = [fact for _, fact, _ in self.records("", at)]
+        private = internal_view(self.schema, private_facts)
         records = self.records(user, at)
+        rut_protection = RutProtection(private_facts, records)
         baseline = probabilities(self.policy, observer_view(records))
         _, allowed = user_grants(self.policy, role_graph(self.schema, self.case, at), user)
         attempts = []
@@ -126,6 +129,11 @@ class Guard:
                 attempts.append({"reason": "incomplete_task"})
                 continue
             facts = {f for clause in clauses for f in clause.facts}
+            text = " ".join(c.text for c in clauses)
+            privacy_reason = rut_protection.reason(text, facts)
+            if privacy_reason:
+                attempts.append({"reason": privacy_reason})
+                continue
             ambiguous = any(predicate in self.policy.families and
                             len(set(private.objects(E[subject], P[predicate]))) > 1
                             for subject, predicate, _ in facts)
