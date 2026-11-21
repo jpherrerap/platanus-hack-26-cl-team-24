@@ -37,6 +37,8 @@ Este análisis genérico es probabilístico y puede omitir información sensible
 
 Los conceptos ordinarios para hechos y reglas intermedias se pueden agregar en «Conceptos y relaciones». Al analizar una fuente interna, Claude también puede proponer conceptos nuevos con descripción y cita, junto con los hechos o reglas que los usan. Las conclusiones protegidas van en «Secretos y acceso»: un concepto nuevo no se convierte automáticamente en un secreto configurado y el modelo no crea roles ni permisos.
 
+Las advertencias, intenciones y condiciones pueden representarse como reportes vinculados a la fuente. Por ejemplo, «cancelarán el despliegue si conocen la fecha» permite registrar el evento reportado y su condición, sin inventar la fecha ni afirmar que la cancelación ocurrió. El constructor indica si la fuente contiene afirmaciones y si cubrió las relevantes; si tras el reintento la extracción sigue vacía sin justificar que no hay afirmaciones, o declara contenido pendiente, se rechaza como «Extracción incompleta». El motivo queda en el detalle de revisión reservado al operador. Este control se añade también a prompts guardados anteriormente. Depende de la interpretación del modelo: no garantiza cobertura semántica ni convierte automáticamente el dato referido en una familia protegida.
+
 ## Construir y probar
 
 1. En «Conocimiento y fuentes», elige un identificador nuevo, fecha, texto y, opcionalmente, los destinatarios que recibieron esa fuente.

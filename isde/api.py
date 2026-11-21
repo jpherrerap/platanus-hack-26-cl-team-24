@@ -272,7 +272,11 @@ def create_app(*, db: str | None = None, rewrite=claude_rewrite, seed=True, mode
                 digest = hashlib.sha256(source.model_dump_json().encode()).hexdigest()
                 context = {"internal": guard.model_context(None, source.at),
                            "recipients": {u: guard.model_context(u, source.at) for u in source.recipients}}
-                result = source_graph(guard, model).invoke({"source": source, "accept": False, "digest": digest})
+                try:
+                    result = source_graph(guard, model).invoke({"source": source, "accept": False, "digest": digest})
+                except ValueError as exc:
+                    activity_events.source_event(guard, source, {"internal": [], "external": [], "analysis_error": str(exc)})
+                    raise
                 events = result["internal"] + result["external"]
                 current = {"internal": guard.model_context(None, source.at),
                            "recipients": {u: guard.model_context(u, source.at) for u in source.recipients}}
@@ -395,8 +399,12 @@ def create_app(*, db: str | None = None, rewrite=claude_rewrite, seed=True, mode
                             raise ValueError("Identificador de fuente usado con otro contenido")
                         if guard.source_has_content(data.origin):
                             return {"accepted": False, "proposals": 0}
-                result = source_graph(guard, model).invoke(
-                    {"source": data, "accept": source.accept, "digest": digest})
+                try:
+                    result = source_graph(guard, model).invoke(
+                        {"source": data, "accept": source.accept, "digest": digest})
+                except ValueError as exc:
+                    activity_events.source_event(guard, data, {"internal": [], "external": [], "analysis_error": str(exc)})
+                    raise
                 observations = result["internal"] + result["external"]
                 activity_events.source_event(guard, data, result)
                 if source.accept:

@@ -190,6 +190,132 @@ class DynamicVocabularyTests(unittest.TestCase):
                 propose(self.policy, self.source.model_copy(update={"user":"usuario_demo"}), "delivered")
         self.assertEqual(request.call_count, 2)
 
+    @unittest.skipUnless(all(importlib.util.find_spec(n) for n in ("fastapi", "langgraph", "httpx")),
+                         "Instala el extra api")
+    def test_warning_is_proposed_as_report_without_asserting_the_event_or_inventing_location(self):
+        from fastapi.testclient import TestClient
+        from isde.api import create_app
+        from isde.claude import InternalSuggestions
+        text = "importante: van a bombardear la ciudad del servidor azul apenas sepan donde se va a construir ten cuidado"
+        calls = []
+        def fake(role, context, schema, client, model):
+            calls.append(context)
+            self.assertIs(schema, InternalSuggestions)
+            self.assertIn("PROMPT ANTERIOR GUARDADO", role)
+            self.assertIn("Reifica el reporte como una entidad", role)
+            self.assertIn("sin convertirlos en una implicación universal", role)
+            if len(calls) == 1:
+                return schema(items=[])
+            report = "reporte_" + context["source_id"]
+            return schema.model_validate({"has_factual_claims":True, "covers_all_claims":True,
+                "vocabulary":[{"predicate":name, "description":description, "quote":quote, "confidence":.8}
+                    for name, description, quote in [
+                        ("reporta_riesgo", "Evento adverso reportado por una fuente", "van a bombardear"),
+                        ("sobre_recurso", "Recurso al que se refiere un reporte", "servidor azul"),
+                        ("condicionado_a_conocer", "Dato cuyo conocimiento condiciona un evento reportado",
+                         "apenas sepan donde se va a construir")]],
+                "items":[{"fact":[report, predicate, value], "quote":quote, "confidence":.8}
+                    for predicate, value, quote in [
+                        ("reporta_riesgo", "bombardeo_de_ciudad", "van a bombardear la ciudad"),
+                        ("sobre_recurso", "servidor_azul", "servidor azul"),
+                        ("condicionado_a_conocer", "ubicacion_construccion_servidor_azul",
+                         "apenas sepan donde se va a construir")]]})
+        with tempfile.TemporaryDirectory() as folder, mock.patch.dict(os.environ, {}, clear=True), \
+             mock.patch("isde.claude._request", side_effect=fake):
+            path = str(Path(folder) / "data.sqlite")
+            client = TestClient(create_app(db=path, seed=False))
+            self.assertEqual(client.put("/v1/demo/prompts/ontology", json={"prompt":"PROMPT ANTERIOR GUARDADO"}).status_code, 200)
+            body = {"origin":"correo_bomb", "at":DAY.isoformat(), "text":text, "recipients":[]}
+            response = client.post("/v1/demo/sources/preview", json=body)
+            self.assertEqual(response.status_code, 200, response.text)
+            preview = response.json()
+            self.assertIsNotNone(preview["preview_id"])
+            self.assertEqual(len(calls), 2)
+            guard = Guard(path, self.policy, self.case)
+            self.assertEqual(guard.proposed_vocabulary(DAY), [])
+            guard.close()
+            accepted = client.post(f"/v1/demo/sources/{preview['preview_id']}/accept")
+            self.assertTrue(accepted.json()["accepted"], accepted.text)
+            self.assertEqual(len(calls), 2)
+            guard = Guard(path, self.policy, self.case)
+            try:
+                facts = guard.model_context(None, DAY)["facts"]
+                self.assertEqual(len(facts), 3)
+                self.assertTrue(all(fact[0].startswith("reporte_fuente_") for fact in facts))
+                self.assertEqual({f[1] for f in facts}, {"reporta_riesgo", "sobre_recurso", "condicionado_a_conocer"})
+                self.assertEqual(guard.proposed_rules(DAY), [])
+                self.assertEqual(guard.policy_at(DAY).families, self.policy.families)
+                self.assertEqual(client.get("/v1/inbox/usuario_demo").json()["messages"], [])
+            finally:
+                guard.close()
+
+    def test_greeting_explicitly_without_claims_can_return_empty_without_retry(self):
+        from isde.claude import InternalSuggestions
+        result = InternalSuggestions(items=[], has_factual_claims=False, covers_all_claims=True)
+        with mock.patch("isde.claude._request", return_value=result) as request:
+            self.assertEqual(propose(self.policy, Source(origin="saludo", at=DAY, text="hola amigo!! q tal")), [])
+        self.assertEqual(request.call_count, 1)
+
+    def test_unexplained_empty_extraction_is_an_error_after_retry(self):
+        from isde.claude import InternalSuggestions
+        with mock.patch("isde.claude._request", return_value=InternalSuggestions(items=[])) as request:
+            with self.assertRaisesRegex(ValueError, "Extracción incompleta: el modelo no representó"):
+                propose(self.policy, self.source)
+        self.assertEqual(request.call_count, 2)
+
+    def test_unrepresented_claims_require_literal_quotes_even_when_rejecting_extraction(self):
+        from isde.claude import InternalSuggestions
+        result = InternalSuggestions(items=[], covers_all_claims=False, unrepresented_claims=[{
+            "quote":"texto inventado", "reason":"No se pudo preservar el alcance"}])
+        with mock.patch("isde.claude._request", return_value=result) as request:
+            with self.assertRaisesRegex(ValueError, "afirmación no representada requiere una cita literal"):
+                propose(self.policy, self.source)
+        self.assertEqual(request.call_count, 2)
+
+    @unittest.skipUnless(all(importlib.util.find_spec(n) for n in ("fastapi", "langgraph", "httpx")),
+                         "Instala el extra api")
+    def test_partial_extraction_records_private_diagnostic_without_importing_source(self):
+        from fastapi.testclient import TestClient
+        from isde.api import create_app
+        from isde.claude import InternalSuggestions
+        reason = "No se pudo representar la condición sin perder su alcance"
+        calls = []
+        def fake(role, context, schema, client, model):
+            self.assertIs(schema, InternalSuggestions)
+            calls.append(context)
+            if len(calls) % 2 == 0:
+                self.assertEqual(context["unrepresented_claims"][0]["reason"], reason)
+            return schema(items=[{"fact":self.fact,"quote":self.source_text,"confidence":.9}],
+                          vocabulary=[self.concept], covers_all_claims=False,
+                          unrepresented_claims=[{"quote":"Roble 10", "reason":reason}])
+        with tempfile.TemporaryDirectory() as folder, \
+             mock.patch.dict(os.environ, {"MOSAIC_OPERATOR_TOKEN":"operator"}, clear=True), \
+             mock.patch("isde.claude._request", side_effect=fake):
+            path = str(Path(folder) / "data.sqlite")
+            client = TestClient(create_app(db=path, seed=False))
+            for index, endpoint in enumerate(("/v1/demo/sources/preview", "/v1/sources")):
+                body = {"origin":"incompleta_" + str(index), "at":DAY.isoformat(), "text":self.source_text}
+                if endpoint == "/v1/sources":
+                    body["accept"] = True
+                response = client.post(endpoint, json=body)
+                self.assertEqual(response.status_code, 400, response.text)
+                self.assertIn(reason, response.json()["detail"])
+            feed = client.get("/v1/demo/events").json()
+            self.assertEqual(feed["counts"]["flagged"], 2)
+            self.assertEqual(feed["counts"]["blocked"], 0)
+            self.assertNotIn(reason, str(feed))
+            event_id = feed["events"][0]["id"]
+            self.assertEqual(client.get(f"/v1/demo/events/{event_id}").status_code, 403)
+            event = client.get(f"/v1/demo/events/{event_id}", headers={"X-Mosaic-Operator-Token":"operator"}).json()
+            self.assertIn(reason, event["details"]["analysis_error"])
+            guard = Guard(path, self.policy, self.case)
+            try:
+                self.assertEqual(guard.proposed_vocabulary(DAY), [])
+                self.assertEqual(guard.db.execute("SELECT count(*) FROM source_imports").fetchone()[0], 0)
+                self.assertEqual(guard.model_context(None, DAY)["facts"], [])
+            finally:
+                guard.close()
+
     def test_invalid_new_concepts_and_late_failure_leave_no_partial_changes(self):
         guard = Guard(":memory:", self.policy, self.case)
         self.addCleanup(guard.close)

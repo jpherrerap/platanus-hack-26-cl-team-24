@@ -49,6 +49,8 @@ def source_event(guard, source, result):
                "model": model_id(), "missing_recipients": missing,
                "observations": [e.model_dump(mode="json") for e in observations],
                "notice": "Analizar una entrada no implica que se haya bloqueado una salida."}
+    if result.get("analysis_error"):
+        details["analysis_error"] = result["analysis_error"]
     digest = hashlib.sha256(json.dumps(details, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:20]
     return record(guard, "flagged", title, "source", f"{source.origin}:{digest}", details)
 
