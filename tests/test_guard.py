@@ -100,6 +100,96 @@ class DynamicVocabularyTests(unittest.TestCase):
         self.assertIn("predicados disponibles", calls[1]["system"])
         self.assertEqual(events[0].facts[0][1], "relacion_fuente_1")
 
+    def test_rule_repair_identifies_missing_predicates_including_conclusion(self):
+        from isde.claude import InternalSuggestions
+        text = "Todo proyecto que usa un servidor depende de ese servidor."
+        calls = []
+        def request(role, context, schema, client, model):
+            calls.append(role)
+            vocabulary = [{"predicate":"usa", "description":"Usa un recurso",
+                           "quote":"usa", "confidence":.9}]
+            if len(calls) == 2:
+                self.assertIn("Predicados sin definición en tu propuesta: depende", role)
+                vocabulary.append({"predicate":"depende", "description":"Dependencia de un recurso",
+                                   "quote":"depende", "confidence":.9})
+            return InternalSuggestions(items=[], vocabulary=vocabulary, rules=[{
+                "rule":{"when":[["?x","usa","?y"]], "then":["?x","depende","?y"]},
+                "quote":text, "confidence":.9}])
+        with mock.patch("isde.claude._request", side_effect=request):
+            events = propose(self.policy, Source(origin="reglas", at=DAY, text=text))
+        self.assertEqual(len(calls), 2)
+        guard = Guard(":memory:", self.policy, self.case)
+        self.addCleanup(guard.close)
+        guard.observe(events)
+        self.assertIn("depende", guard.policy_at(DAY).vocabulary)
+        self.assertEqual(len(guard.proposed_rules(DAY)), 1)
+
+    def test_missing_definitions_are_created_without_rewriting_facts_or_rules(self):
+        from isde.claude import InternalSuggestions, VocabularyDefinitions
+        text = "P tiene a. Todo a implica b."
+        proposal = {"items":[{"fact":["p","a","yes"], "quote":"P tiene a.", "confidence":.9}],
+                    "rules":[{"rule":{"when":[["?x","a","yes"]], "then":["?x","b","yes"]},
+                              "quote":"Todo a implica b.", "confidence":.9}]}
+        calls = []
+        def create(**request):
+            calls.append(request)
+            if len(calls) < 3:
+                payload = proposal
+                self.assertEqual(request["tools"][0]["input_schema"], InternalSuggestions.model_json_schema())
+            else:
+                context = json.loads(request["messages"][0]["content"])
+                self.assertEqual(context["missing_predicates"], ["a", "b"])
+                self.assertEqual(context["proposal"]["items"], proposal["items"])
+                self.assertEqual(context["proposal"]["rules"], proposal["rules"])
+                self.assertEqual(request["tools"][0]["input_schema"], VocabularyDefinitions.model_json_schema())
+                payload = {"vocabulary":[{"predicate":name, "description":"Propiedad " + name,
+                                          "quote":name, "confidence":.9} for name in ("a", "b")]}
+            return SimpleNamespace(content=[SimpleNamespace(type="tool_use", name="select_evidence", input=payload)],
+                                   stop_reason="tool_use")
+        client = SimpleNamespace(messages=SimpleNamespace(create=create))
+        events = propose(self.policy, Source(origin="reglas", at=DAY, text=text), client=client)
+        self.assertEqual(len(calls), 3)
+        guard = Guard(":memory:", self.policy, self.case)
+        self.addCleanup(guard.close)
+        guard.observe(events)
+        self.assertTrue({"a", "b"} <= guard.policy_at(DAY).vocabulary.keys())
+        self.assertIn(("p", "a", "yes"), guard.model_context(None, DAY)["facts"])
+        self.assertEqual(guard.proposed_rules(DAY)[0]["rule"], proposal["rules"][0]["rule"])
+
+    def test_incomplete_or_unrelated_definitions_are_rejected(self):
+        from isde.claude import InternalSuggestions, VocabularyDefinitions
+        text = "Todo a implica b."
+        result = InternalSuggestions(items=[], rules=[{
+            "rule":{"when":[["?x","a","yes"]], "then":["?x","b","yes"]},
+            "quote":text, "confidence":.9}])
+        for names in [[], ["a"], ["a", "b", "extra"], ["a", "b", "b"]]:
+            with self.subTest(names=names):
+                definitions = VocabularyDefinitions(vocabulary=[{
+                    "predicate":name, "description":"Propiedad " + name, "quote":"a", "confidence":.9
+                } for name in names])
+                with mock.patch("isde.claude._request", side_effect=[result, result, definitions]) as request:
+                    with self.assertRaisesRegex(ValueError, "completar las definiciones de: a, b"):
+                        propose(self.policy, Source(origin="reglas", at=DAY, text=text))
+                self.assertEqual(request.call_count, 3)
+
+    def test_completed_definitions_still_require_literal_evidence(self):
+        from isde.claude import InternalSuggestions, VocabularyDefinitions
+        result = InternalSuggestions(items=[{"fact":self.fact,
+                     "quote":"mi direccion es Roble 10", "confidence":.9}])
+        definitions = VocabularyDefinitions(vocabulary=[{**self.concept, "quote":"texto inventado"}])
+        with mock.patch("isde.claude._request", side_effect=[result, result, definitions]):
+            with self.assertRaisesRegex(ValueError, "concepto requiere descripción y cita literal"):
+                propose(self.policy, self.source)
+
+    def test_observer_cannot_create_undefined_predicates(self):
+        from isde.claude import ObserverSuggestions
+        result = ObserverSuggestions(items=[{"fact":self.fact,
+                     "quote":"mi direccion es Roble 10", "confidence":.9}])
+        with mock.patch("isde.claude._request", return_value=result) as request:
+            with self.assertRaisesRegex(ValueError, "predicados sin definir: domicilio"):
+                propose(self.policy, self.source.model_copy(update={"user":"usuario_demo"}), "delivered")
+        self.assertEqual(request.call_count, 2)
+
     def test_invalid_new_concepts_and_late_failure_leave_no_partial_changes(self):
         guard = Guard(":memory:", self.policy, self.case)
         self.addCleanup(guard.close)

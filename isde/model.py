@@ -92,7 +92,7 @@ class Rule(Model):
         predicates = policy.vocabulary.keys() | policy.families.keys()
         for _, predicate, value in [*self.when, self.then]:
             if predicate not in predicates:
-                raise ValueError("Predicado sin definición")
+                raise ValueError(f"Predicado sin definición: {predicate}")
             if predicate in policy.families and not value.startswith("?"):
                 if not policy.families[predicate].accepts(value):
                     raise ValueError("Estado fuera de la familia protegida")
@@ -154,8 +154,9 @@ class Policy(Model):
                     pending.extend(self.roles[parent].parents)
         predicates = self.vocabulary.keys() | self.families.keys()
         for chain in self.chains:
-            if {chain.target, chain.status, chain.conclusion} - predicates:
-                raise ValueError("Predicado sin definición")
+            missing = {chain.target, chain.status, chain.conclusion} - predicates
+            if missing:
+                raise ValueError("Predicado sin definición: " + ", ".join(sorted(missing)))
         for rule in self.rules:
             rule.validate_policy(self)
         for family in self.families.values():
