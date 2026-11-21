@@ -1,0 +1,20 @@
+{
+  "enabledPlugins": {
+    "claudex-loop@claudex-loop": true,
+    "ponytail@ponytail": true
+  },
+  "extraKnownMarketplaces": {
+    "ponytail": {
+      "source": {
+        "source": "github",
+        "repo": "DietrichGebert/ponytail"
+      }
+    },
+    "claudex-loop": {
+      "source": {
+        "source": "github",
+        "repo": "chaseai-yt/claudex-loop"
+      }
+    }
+  }
+}
