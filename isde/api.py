@@ -7,13 +7,15 @@ from datetime import date
 from threading import RLock
 
 from fastapi import FastAPI, Header, HTTPException
+from fastapi.responses import HTMLResponse
 from .semantic import ClaudeAnalysis, SourceInput, source_graph
 from . import reviews
 from pydantic import BaseModel, ConfigDict, Field
 
 from .cli import EXAMPLES
 from .guard import Guard
-from .model import Batch, Case, Policy
+from .model import Batch, Case, Family, Policy
+from .prompts import DEFAULT_PROMPTS
 from .workflow import claude_rewrite, fingerprint, make_workflow
 
 
@@ -53,6 +55,25 @@ class IncomingSource(SourceInput):
     accept: bool = False
 
 
+class PromptUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    prompt: str = Field(min_length=1, max_length=16000)
+
+
+class VocabularyUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    description: str = Field(min_length=1, max_length=2000)
+
+
+class SecretUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    description: str = Field(min_length=1, max_length=2000)
+    statuses: list[str] = Field(min_length=1, max_length=32)
+    absolute: float = Field(ge=0, le=1, allow_inf_nan=False)
+    increase: float = Field(ge=0, le=1, allow_inf_nan=False)
+    allowed_roles: list[str] = Field(default_factory=list, max_length=100)
+
+
 def create_app(*, db: str | None = None, rewrite=claude_rewrite, seed=True, model=None):
     db = db or os.environ.get("MOSAIC_API_DB", os.environ.get("ISDE_API_DB", "mosaic-api.sqlite"))
     samples = EXAMPLES
@@ -61,14 +82,179 @@ def create_app(*, db: str | None = None, rewrite=claude_rewrite, seed=True, mode
     history = Batch.load(os.environ.get("MOSAIC_HISTORY", os.environ.get("ISDE_HISTORY", str(samples / "history.yaml")))) if seed else None
     lock = RLock()
     operator_token = os.environ.get("MOSAIC_OPERATOR_TOKEN")
-    model = model or ClaudeAnalysis()
+    prompts = dict(DEFAULT_PROMPTS)
+    initializer = Guard(db, policy, case)
+    try:
+        row = initializer.db.execute("SELECT policy,prompts FROM dashboard_config WHERE org=? AND op=?",
+                                     initializer.scope).fetchone()
+        if row:
+            policy = Policy.model_validate_json(row[0])
+            saved = json.loads(row[1])
+            prompts.update({key: value for key, value in saved.items() if key in prompts})
+    finally:
+        initializer.close()
+    model = model or ClaudeAnalysis(prompts)
+    staged_sources = {}
     if seed:
-        guard = Guard(db, policy, case)
+        guard = Guard(db, policy, case, prompts=prompts)
         try:
             guard.observe(history.observations)
         finally:
             guard.close()
     app = FastAPI(title="mosAIc demo", version="0.1.0")
+
+    def open_guard():
+        return Guard(db, policy, case, prompts=prompts)
+
+    def persist_config(guard, new_policy, new_prompts):
+        guard.db.execute("""
+            INSERT INTO dashboard_config VALUES (?,?,?,?,1)
+            ON CONFLICT(org,op) DO UPDATE SET policy=excluded.policy, prompts=excluded.prompts,
+                                               revision=dashboard_config.revision+1
+        """, (*guard.scope, new_policy.model_dump_json(), json.dumps(new_prompts, ensure_ascii=False)))
+
+    @app.get("/", response_class=HTMLResponse)
+    def dashboard():
+        from .dashboard import PAGE
+        return HTMLResponse(PAGE, headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
+                            "Content-Security-Policy": "default-src 'self'; script-src 'unsafe-inline'; "
+                                                       "style-src 'unsafe-inline'; object-src 'none'; "
+                                                       "base-uri 'none'; frame-ancestors 'none'"})
+
+    @app.get("/v1/demo/config")
+    def configuration():
+        with lock:
+            return {"users": sorted({a.user for a in case.assignments if (a.org, a.operation) == (case.org, case.operation)}),
+                    "roles": sorted(policy.roles), "prompts": dict(prompts), "default_prompts": dict(DEFAULT_PROMPTS),
+                    "families": policy.model_dump()["families"],
+                    "grants": {name: role.receive for name, role in policy.roles.items()},
+                    "vocabulary": policy.vocabulary, "scope": {"org": case.org, "operation": case.operation},
+                    "day": date.today().isoformat()}
+
+    @app.put("/v1/demo/prompts/{agent}")
+    def update_prompt(agent: str, item: PromptUpdate):
+        if agent not in DEFAULT_PROMPTS or not item.prompt.strip():
+            raise HTTPException(status_code=400, detail="Agente o prompt inválido")
+        with lock:
+            guard = open_guard()
+            try:
+                changed = {**prompts, agent: item.prompt}
+                with guard.transaction():
+                    persist_config(guard, policy, changed)
+                prompts.update(changed)
+                return {"agent": agent, "saved": True}
+            finally:
+                guard.close()
+
+    @app.put("/v1/demo/secrets/{name}")
+    def update_secret(name: str, item: SecretUpdate):
+        nonlocal policy
+        with lock:
+            guard = open_guard()
+            try:
+                if set(item.allowed_roles) - policy.roles.keys():
+                    raise ValueError("Rol desconocido")
+                if name in policy.families and set(policy.families[name].statuses) - set(item.statuses):
+                    raise ValueError("No se pueden eliminar estados protegidos existentes desde el panel")
+                data = policy.model_dump(mode="json")
+                data["families"][name] = Family(description=item.description, statuses=item.statuses,
+                                                absolute=item.absolute, increase=item.increase).model_dump(mode="json")
+                for role, entry in data["roles"].items():
+                    entry["receive"] = [family for family in entry["receive"] if family != name]
+                    if role in item.allowed_roles:
+                        entry["receive"].append(name)
+                updated = Policy.model_validate(data)
+                for table, column in (("evidence", "fact"), ("interpretations", "claim")):
+                    for (encoded,) in guard.db.execute(f"SELECT {column} FROM {table} WHERE org=? AND op=?", guard.scope):
+                        _, predicate, value = json.loads(encoded)
+                        if predicate == name and value not in item.statuses:
+                            raise ValueError("Un estado existente quedaría fuera de la familia protegida")
+                for proposal in guard.proposed_rules(date.max):
+                    from .model import Rule
+                    Rule.model_validate(proposal["rule"]).validate_policy(updated)
+                with guard.transaction():
+                    persist_config(guard, updated, prompts)
+                policy = updated
+                return {"secret": name, "saved": True}
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            finally:
+                guard.close()
+
+    @app.put("/v1/demo/vocabulary/{name}")
+    def update_vocabulary(name: str, item: VocabularyUpdate):
+        nonlocal policy
+        with lock:
+            guard = open_guard()
+            try:
+                if name in policy.families:
+                    raise ValueError("La relación ya es una familia protegida")
+                data = policy.model_dump(mode="json")
+                data["vocabulary"][name] = item.description
+                updated = Policy.model_validate(data)
+                with guard.transaction():
+                    persist_config(guard, updated, prompts)
+                policy = updated
+                return {"predicate": name, "saved": True}
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            finally:
+                guard.close()
+
+    @app.post("/v1/demo/sources/preview")
+    def preview_source(source: SourceInput):
+        with lock:
+            guard = open_guard()
+            try:
+                valid = {a.user for a in case.assignments if (a.org, a.operation) == guard.scope}
+                if set(source.recipients) - valid:
+                    raise ValueError("Destinatario fuera del directorio")
+                digest = hashlib.sha256(source.model_dump_json().encode()).hexdigest()
+                context = {"internal": guard.model_context(None, source.at),
+                           "recipients": {u: guard.model_context(u, source.at) for u in source.recipients}}
+                result = source_graph(guard, model).invoke({"source": source, "accept": False, "digest": digest})
+                events = result["internal"] + result["external"]
+                current = {"internal": guard.model_context(None, source.at),
+                           "recipients": {u: guard.model_context(u, source.at) for u in source.recipients}}
+                if current != context:
+                    raise ValueError("El contexto cambió durante el análisis")
+                token = secrets.token_hex(16)
+                if len(staged_sources) >= 32:
+                    staged_sources.pop(next(iter(staged_sources)))
+                staged_sources[token] = (source, digest, context, events)
+                return {"preview_id": token, "observations": [e.model_dump(mode="json") for e in events]}
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            except Exception as exc:
+                raise HTTPException(status_code=503, detail="No se pudo analizar la fuente") from exc
+            finally:
+                guard.close()
+
+    @app.post("/v1/demo/sources/{preview_id}/accept")
+    def accept_source(preview_id: str):
+        with lock:
+            if preview_id not in staged_sources:
+                raise HTTPException(status_code=404, detail="Propuesta no disponible; vuelve a analizar la fuente")
+            source, digest, context, events = staged_sources[preview_id]
+            guard = open_guard()
+            try:
+                with guard.transaction():
+                    previous = guard.db.execute("SELECT digest FROM source_imports WHERE org=? AND op=? AND source_id=?",
+                                                (*guard.scope, source.origin)).fetchone()
+                    if previous:
+                        if previous[0] != digest:
+                            raise ValueError("Identificador de fuente usado con otro contenido")
+                        return {"accepted": False, "proposals": 0}
+                    current = {"internal": guard.model_context(None, source.at),
+                               "recipients": {u: guard.model_context(u, source.at) for u in source.recipients}}
+                    if current != context:
+                        raise ValueError("El contexto cambió; vuelve a analizar la fuente")
+                accepted = guard.observe(events, source_id=source.origin, source_digest=digest)
+                return {"accepted": accepted, "proposals": len(events)}
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            finally:
+                guard.close()
 
     @app.get("/health")
     def health():
@@ -79,7 +265,7 @@ def create_app(*, db: str | None = None, rewrite=claude_rewrite, seed=True, mode
         if not item.draft.strip() or not item.request_id.strip():
             raise HTTPException(status_code=422, detail="Borrador o identificador vacío")
         with lock:
-            guard = Guard(db, policy, case)
+            guard = open_guard()
             try:
                 if item.user not in {a.user for a in case.assignments if (a.org, a.operation) == guard.scope}:
                     raise ValueError("Destinatario fuera del directorio")
@@ -95,7 +281,8 @@ def create_app(*, db: str | None = None, rewrite=claude_rewrite, seed=True, mode
                         raise HTTPException(status_code=409, detail="Identificador usado para otra solicitud")
                     stored = json.loads(previous[2])
                     return {"request_id": item.request_id, "action": stored["action"], "text": stored["text"]}
-                flow = make_workflow(guard, rewrite).invoke({
+                active_rewrite = (lambda draft, safe, task: claude_rewrite(draft, safe, task, prompt=prompts["rewriter"])) if rewrite is claude_rewrite else rewrite
+                flow = make_workflow(guard, active_rewrite).invoke({
                     "user": item.user, "task": item.task, "day": item.day, "request_id": item.request_id,
                     "fingerprint": token, "candidate": item.draft, "rewrites": 0,
                 })
@@ -109,7 +296,7 @@ def create_app(*, db: str | None = None, rewrite=claude_rewrite, seed=True, mode
     @app.post("/v1/observations")
     def observations(batch: Batch):
         with lock:
-            guard = Guard(db, policy, case)
+            guard = open_guard()
             try:
                 valid = {a.user for a in case.assignments if (a.org, a.operation) == guard.scope}
                 if any(event.user is not None and event.user not in valid for event in batch.observations):
@@ -124,7 +311,7 @@ def create_app(*, db: str | None = None, rewrite=claude_rewrite, seed=True, mode
     @app.post("/v1/sources")
     def sources(source: IncomingSource):
         with lock:
-            guard = Guard(db, policy, case)
+            guard = open_guard()
             try:
                 valid = {a.user for a in case.assignments if (a.org, a.operation) == guard.scope}
                 if set(source.recipients) - valid:
@@ -155,7 +342,7 @@ def create_app(*, db: str | None = None, rewrite=claude_rewrite, seed=True, mode
     @app.post("/v1/reviews")
     def new_review(item: NewReview):
         with lock:
-            guard = Guard(db, policy, case)
+            guard = open_guard()
             try:
                 return reviews.review(guard, model, item.review_id, item.user, item.task,
                                       item.day, item.text, item.question)
@@ -171,7 +358,7 @@ def create_app(*, db: str | None = None, rewrite=claude_rewrite, seed=True, mode
         if not operator_token or not secrets.compare_digest(operator_token.encode(), x_mosaic_operator_token.encode()):
             raise HTTPException(status_code=403, detail="Acceso de operador requerido")
         with lock:
-            guard = Guard(db, policy, case)
+            guard = open_guard()
             try:
                 row = guard.db.execute(
                     "SELECT revision,status,trace FROM semantic_reviews WHERE org=? AND op=? AND review_id=? AND user=?",
@@ -185,7 +372,7 @@ def create_app(*, db: str | None = None, rewrite=claude_rewrite, seed=True, mode
     @app.post("/v1/reviews/{review_id}/revisions")
     def revision(review_id: str, item: Revision):
         with lock:
-            guard = Guard(db, policy, case)
+            guard = open_guard()
             try:
                 return reviews.review(guard, model, review_id, item.user, "", date.today(),
                                       item.text, "", revision=True, revision_id=item.revision_id)
@@ -199,7 +386,7 @@ def create_app(*, db: str | None = None, rewrite=claude_rewrite, seed=True, mode
     @app.post("/v1/reviews/{review_id}/deliver")
     def deliver(review_id: str, item: Recipient):
         with lock:
-            guard = Guard(db, policy, case)
+            guard = open_guard()
             try:
                 return reviews.delivery_graph(guard).invoke({"review_id": review_id, "user": item.user})["outcome"]
             except ValueError as exc:
@@ -210,7 +397,7 @@ def create_app(*, db: str | None = None, rewrite=claude_rewrite, seed=True, mode
     @app.get("/v1/inbox/{user}")
     def inbox(user: str):
         with lock:
-            guard = Guard(db, policy, case)
+            guard = open_guard()
             try:
                 if user not in {a.user for a in case.assignments if (a.org, a.operation) == guard.scope}:
                     raise HTTPException(status_code=404, detail="Destinatario desconocido")

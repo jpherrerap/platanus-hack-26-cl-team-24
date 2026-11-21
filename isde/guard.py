@@ -13,9 +13,10 @@ from .privacy import RutProtection
 
 
 class Guard:
-    def __init__(self, db: str, policy: Policy, case: Case):
+    def __init__(self, db: str, policy: Policy, case: Case, *, prompts=None):
         self.policy = policy
         self.case = case
+        self.prompts = prompts or {}
         if any(a.role not in policy.roles for a in case.assignments):
             raise ValueError("Rol del directorio desconocido")
         self.schema = make_schema(policy)
@@ -39,6 +40,9 @@ class Guard:
             CREATE TABLE IF NOT EXISTS source_imports (
                 org TEXT, op TEXT, source_id TEXT, digest TEXT,
                 PRIMARY KEY(org, op, source_id));
+            CREATE TABLE IF NOT EXISTS dashboard_config (
+                org TEXT, op TEXT, policy TEXT, prompts TEXT, revision INTEGER,
+                PRIMARY KEY(org, op));
             CREATE TABLE IF NOT EXISTS semantic_reviews (
                 org TEXT, op TEXT, review_id TEXT, user TEXT, task TEXT, day TEXT, question TEXT,
                 original_hash TEXT, revision INTEGER, text TEXT, analysis TEXT,
@@ -180,8 +184,9 @@ class Guard:
             inferred = sorted((str(s).removeprefix(str(E)), str(p).removeprefix(str(P)),
                                str(o).removeprefix(str(E))) for s, p, o in potential
                               if str(p).startswith(str(P)) and (s, p, o) not in private)
+            row = self.db.execute("SELECT revision FROM dashboard_config WHERE org=? AND op=?", self.scope).fetchone()
             return {"kind": "internal", "facts": triples, "proposed_rules": proposals,
-                    "possible_inferences": inferred}
+                    "possible_inferences": inferred, "config_revision": row[0] if row else 0}
         access = role_graph(self.schema, self.case, at)
         roles = sorted({name for assignment in access.subjects(V.user, E[user])
                         for name in self.policy.roles if (assignment, RDF.type, R[name]) in access})
@@ -313,7 +318,8 @@ class Guard:
                 if text in assessments:
                     continue
                 try:
-                    assessments[text] = assess_hypotheses(self.policy, text, context, client=client, model=assessor)
+                    assessments[text] = assess_hypotheses(self.policy, text, context, client=client, model=assessor,
+                                                          prompt=self.prompts.get("adversary"))
                 except Exception:
                     # A provider outage or malformed assessment leaves the inbox untouched.
                     return {"action": "review", "text": None, "attempts": [{"reason": "assessment_unavailable"}]}

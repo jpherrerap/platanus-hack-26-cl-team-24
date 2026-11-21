@@ -166,7 +166,7 @@ La política de ejemplo incluye `information_type` y `renewal_outlook`. Las señ
 
 La API usa LangGraph para procesar fuentes y para revisar texto libre. Se instala con `python -m pip install -e '.[api]'` y se inicia con `python -m uvicorn isde.api:create_app --factory --host 127.0.0.1 --port 8001`. Configura `ANTHROPIC_API_KEY` o ejecuta `mosaic key`. El modelo puede elegirse con `MOSAIC_CLAUDE_MODEL`.
 
-Un adaptador de confianza puede proponer hechos y perspectivas de destinatarios mediante `POST /v1/sources`. El cuerpo contiene `origin`, `at`, `text` y `recipients`. La llamada devuelve propuestas con citas literales. Para aceptarlas, envía el mismo cuerpo con `accept: true`. La aceptación se registra una vez por origen y contenido. También se pueden incorporar observaciones estructuradas con `POST /v1/observations`.
+El panel disponible en http://127.0.0.1:8001/ permite configurar los agentes, el vocabulario y las conclusiones protegidas y probar fuentes y respuestas; consulta [panel.md](panel.md). Un adaptador de confianza puede proponer hechos y perspectivas de destinatarios mediante `POST /v1/sources`. El cuerpo contiene `origin`, `at`, `text` y `recipients`. La llamada devuelve propuestas con citas literales. Para aceptarlas, envía el mismo cuerpo con `accept: true`. La aceptación se registra una vez por origen y contenido. También se pueden incorporar observaciones estructuradas con `POST /v1/observations`.
 
 Un agente externo revisa su borrador con `POST /v1/reviews`. El ejemplo usa los hechos del caso de prueba.
 

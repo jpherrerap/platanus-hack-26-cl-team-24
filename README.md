@@ -18,6 +18,18 @@ mosAIc es un guardrail que revisa la respuesta de un agente de IA antes de entre
 
 ## Probarlo
 
+Para usar el panel con Claude en Python 3.11 o posterior:
+
+```bash
+python -m pip install -e '.[api]'
+mosaic key
+python -m uvicorn isde.api:create_app --factory --host 127.0.0.1 --port 8001
+```
+
+Abre http://127.0.0.1:8001/ para editar prompts, conclusiones protegidas y conceptos; analizar fuentes; y evaluar respuestas de texto libre. Si prefieres, configura `ANTHROPIC_API_KEY` en el entorno en lugar de `mosaic key`. Los análisis con Claude consumen API. La configuración se guarda en la base de datos de la API. Detalles y límites en [docs/panel.md](docs/panel.md).
+
+La demo original, con respuestas de catálogo y sin Claude, sigue disponible:
+
 Requiere Python 3.11 o posterior. Desde la raíz del repositorio, en macOS o Linux:
 
 ```bash
@@ -34,6 +46,7 @@ La demo usa datos ficticios, corre en memoria y no necesita clave de Claude. La 
 
 - [docs/isde.md](docs/isde.md): cómo decide, política en YAML, historial persistente, integración con Claude y límites conocidos.
 - [docs/demo.md](docs/demo.md): guion de 3 minutos para presentar la demo.
+- [docs/panel.md](docs/panel.md): configuración de agentes, secretos y pruebas desde la página.
 - [docs/inferencias-multinivel.md](docs/inferencias-multinivel.md): reglas y pruebas de inferencias encadenadas.
 - [isde/prompts.py](isde/prompts.py): guías para construir la ontología interna y evaluar la perspectiva adversarial.
 - [project-description.md](project-description.md): ficha del proyecto.
