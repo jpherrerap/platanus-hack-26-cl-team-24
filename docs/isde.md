@@ -14,7 +14,7 @@ isde demo
 python -m unittest discover -s tests -v
 ```
 
-La demo funciona sin credenciales. Para usar un historial persistente:
+La demo funciona sin credenciales. Para cada destinatario narra el contexto, el borrador del agente, la evaluación y lo que llega a su bandeja; `isde demo --json` entrega la traza completa. Para usar un historial persistente:
 
 ```bash
 isde load examples/history.yaml

@@ -1,10 +1,14 @@
 import concurrent.futures
+import contextlib
+import io
+import json
 import tempfile
 import unittest
 from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
 
+from isde.cli import main
 from isde.claude import Card, Source, interpret, propose
 from isde.graphs import observer_view, probabilities
 from isde.guard import Guard
@@ -185,3 +189,28 @@ class ClaudeTests(unittest.TestCase):
         self.assertIsNone(events[0].confidence)
         with self.assertRaises(ValueError):
             propose(self.policy, source, client=self.client([{**choice,"quote":"Texto inventado"}]))
+
+
+class DemoTests(unittest.TestCase):
+    def demo(self, *extra):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = main(["--policy", str(ROOT / "policy.yaml"), "--case", str(ROOT / "case.yaml"), "demo", *extra])
+        self.assertEqual(code, 0)
+        return out.getvalue()
+
+    def test_demo_tells_the_story(self):
+        text = self.demo()
+        luis = text[text.index("━━ luis"):text.index("━━ sofia")]
+        for line in ("1. Contexto", "ya pudo saber (98%): o17 · signature = signed", "2. Borrador del agente",
+                     "P(betaai · offer_status = signed) 0% → 74%", "RETENIDO", "decisión: REPARAR",
+                     "4. Bandeja de entrada\n   «El trámite vence el viernes.»\n"):
+            self.assertIn(line, luis)
+        self.assertIn("su rol puede recibir: offer_status", text)
+        self.assertIn("0% → 11%", text)
+        self.assertNotIn("\033[", text)
+
+    def test_demo_json_parses(self):
+        results = json.loads(self.demo("--json"))
+        self.assertEqual([r["user"] for r in results], ["ana", "luis", "sofia", "ines"])
+        self.assertEqual(results[1]["text"], "El trámite vence el viernes.")
