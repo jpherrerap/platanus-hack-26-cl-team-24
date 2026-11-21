@@ -90,6 +90,8 @@ class Guard:
         return {"kind": "observer", "roles": roles, "possible_knowledge": hints}
 
     def _decide(self, user, task_id, at, draft):
+        if task_id not in self.case.tasks:
+            raise ValueError(f"Tarea desconocida: {task_id}")
         task = self.case.tasks[task_id]
         private = internal_view(self.schema, (f for _, f, _ in self.records("", at)))
         records = self.records(user, at)
@@ -101,7 +103,9 @@ class Guard:
             def render(option):
                 return " ".join(self.case.clauses[key].text for key in option.clauses)
 
-            match = next((option for option in options if render(option) == draft), None)
+            # Agents and shells add stray spaces or newlines; compare on normalized whitespace.
+            wanted = " ".join(draft.split())
+            match = next((option for option in options if " ".join(render(option).split()) == wanted), None)
             if match is None:
                 attempts.append({"reason": "unmapped_draft"})
                 # For an unrecognized draft, try the shortest approved answer that completes the task.

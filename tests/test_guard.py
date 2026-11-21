@@ -136,6 +136,13 @@ class GuardTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.g.run("ana", "due", DAY, "from_agent", draft=canonical)
 
+    def test_draft_whitespace_and_unknown_task(self):
+        draft = "  El trámite vence el viernes.\n El expediente O-17 corresponde a BetaAI. "
+        self.assertEqual(self.g.run("ana", "due", DAY, draft=draft)["action"], "allow")
+        self.assertEqual(self.g.run("ana", "due", DAY, draft="")["action"], "repair")
+        with self.assertRaises(ValueError):
+            self.decision("ana", "missing")
+
     def test_future_evidence_unavailable(self):
         self.g.observe([Observation(origin="next", facts=[SIGN], at=date(2027,1,1), grade="cited",user="ana")])
         self.assertEqual(self.decision("ana")["action"], "allow")
