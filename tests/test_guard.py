@@ -318,16 +318,23 @@ class DemoTests(unittest.TestCase):
 
     def test_demo_tells_the_story(self):
         text = self.demo()
-        luis = text[text.index("━━ luis"):text.index("━━ sofia")]
-        for line in ("1. Contexto", "ya pudo saber (98%): o17 · signature = signed", "2. Borrador del agente",
+        luis = text[text.index("━━ luis"):text.index("sofia · ")]
+        for line in ("Contexto\n   ya pudo saber (98%): o17 · signature = signed",
                      "P(betaai · offer_status = signed) 0% → 74%", "RETENIDO", "decisión: REPARAR",
-                     "4. Bandeja de entrada\n   «El trámite vence el viernes.»\n"):
+                     "Bandeja de entrada\n   «El trámite vence el viernes.»\n"):
             self.assertIn(line, luis)
-        self.assertIn("su rol puede recibir: offer_status", text)
+        # Allowed answers stay compact so the two interventions are what the audience reads.
+        self.assertIn("\nana · vendor → PERMITIR\n", text)
+        self.assertIn("sofia · legal, senior_legal → PERMITIR\n   su rol puede recibir: offer_status", text)
         self.assertIn("0% → 11%", text)
-        self.assertIn("Resumen · ana (due) PERMITIR · luis (due) REPARAR · sofia (due) PERMITIR · ines (due) PERMITIR · "
-                      "ana (record) REVISIÓN HUMANA · luis (record) PERMITIR", text)
+        ana = text[text.index("━━ ana"):text.index("\nluis · vendor → PERMITIR")]
+        for line in ("ya pudo saber (75%): o17 · counterparty = betaai", "0% → 56%", "decisión: REVISIÓN HUMANA"):
+            self.assertIn(line, ana)
+        self.assertIn("Resumen\n   turno 1 «due»: ana PERMITIR · luis REPARAR · sofia PERMITIR · ines PERMITIR\n"
+                      "   turno 2 «record»: ana REVISIÓN HUMANA · luis PERMITIR\n", text)
         self.assertNotIn("\033[", text)
+        # Readable on a default 80-column terminal.
+        self.assertLessEqual(max(map(len, text.splitlines())), 80)
 
     def test_demo_json_parses(self):
         results = json.loads(self.demo("--json"))
@@ -354,7 +361,7 @@ class CliTests(unittest.TestCase):
         self.addCleanup(os.chdir, cwd)
         code, out, _ = self.cli("demo")
         self.assertEqual(code, 0)
-        self.assertIn("━━ ines", out)
+        self.assertIn("ines · procurement → PERMITIR", out)
 
     def test_input_errors_are_one_spanish_line(self):
         (self.dir / "bad.yaml").write_text("a: [1\n")

@@ -37,23 +37,21 @@ def fact(triple):
 
 
 def story(guard, user, task, at, draft, paint, request_id=None):
-    """Deliver one demo request and narrate it as four numbered steps for a live audience."""
+    """Deliver one demo request and narrate it; allowed answers get a short form so interventions stand out."""
     # Context is captured before delivery, otherwise it would include the answer being judged.
     context = guard.model_context(user, at)
     _, allowed = user_grants(guard.policy, role_graph(guard.schema, guard.case, at), user)
     result = guard.run(user, task, at, request_id or f"demo_{user}", draft=draft)
     label, code = ACTIONS[result["action"]]
-    lines = ["", paint(f"━━ {user} · rol {', '.join(context['roles']) or 'sin rol'} ━━", "1"),
-             paint("1. Contexto", "1") + f"   pide la tarea «{task}»"]
-    if allowed:
-        lines.append(f"   su rol puede recibir: {', '.join(sorted(allowed))}")
-    lines += [f"   ya pudo saber ({pct(k['p_known'])}): {fact(k['fact'])}"
-              for k in context["possible_knowledge"]] or ["   no tiene pistas previas"]
-    lines += [paint("2. Borrador del agente", "1"), f"   «{draft}»", paint("3. Evaluación", "1")]
+    roles = ", ".join(context["roles"]) or "sin rol"
+    known = ([f"   su rol puede recibir: {', '.join(sorted(allowed))}"] if allowed else []) + (
+        [f"   ya pudo saber ({pct(k['p_known'])}): {fact(k['fact'])}" for k in context["possible_knowledge"]]
+        or ["   no tiene pistas previas"])
+    evaluation = []
     for number, attempt in enumerate(result["attempts"], 1):
         prefix = "   borrador:" if number == 1 else f"   alternativa {number}:"
         if "reason" in attempt:
-            lines.append(f"{prefix} {REASONS.get(attempt['reason'], attempt['reason'])}")
+            evaluation.append(f"{prefix} {REASONS.get(attempt['reason'], attempt['reason'])}")
             continue
         blocked = {(b["subject"], b["family"], b["status"]) for b in attempt["blocked"]}
         for change in attempt["changes"]:
@@ -67,15 +65,19 @@ def story(guard, user, task, at, draft, paint, request_id=None):
                 verdict = paint("RETENIDO", "31") + f": alcanza {pct(rule.absolute)}"
             else:
                 verdict = paint("RETENIDO", "31") + f": sube al menos +{pct(rule.increase)}"
-            lines += [f"{prefix} P({fact(goal)}) {pct(change['before'])} → {pct(change['after'])}", f"      {verdict}"]
+            evaluation += [f"{prefix} P({fact(goal)}) {pct(change['before'])} → {pct(change['after'])}",
+                           f"      {verdict}"]
         if not attempt["changes"]:
             restricted = " restringida para su rol" if allowed else ""
-            lines.append(f"{prefix} ninguna conclusión protegida{restricted} aumenta")
-    why = {"allow": "ninguna deducción protegida supera el umbral",
-           "repair": "se entrega la mejor alternativa segura",
-           "review": "ninguna alternativa es admisible; no se entrega nada"}[result["action"]]
-    lines.append("   decisión: " + paint(label, f"1;{code}") + f" · {why}")
-    lines.append(paint("4. Bandeja de entrada", "1"))
+            evaluation.append(f"{prefix} ninguna conclusión protegida{restricted} aumenta")
+    if result["action"] == "allow":
+        return result, "\n".join(["", paint(f"{user} · {roles} → ", "1") + paint(label, f"1;{code}"),
+                                  *known, *evaluation])
+    why = {"repair": "se entrega la mejor alternativa segura",
+           "review": "no hay alternativa segura; no se entrega nada"}[result["action"]]
+    lines = ["", paint(f"━━ {user} · {roles} ━━", "1"), paint("Contexto", "1"), *known,
+             paint("Evaluación", "1"), *evaluation,
+             "   decisión: " + paint(label, f"1;{code}") + f" · {why}", paint("Bandeja de entrada", "1")]
     lines += [f"   «{item['text']}»" for item in guard.inbox(user)] or ["   (vacía)"]
     return result, "\n".join(lines)
 
@@ -84,33 +86,41 @@ def demo(guard, policy, case, history, as_json):
     at = date(2026, 1, 4)
     guard.observe(Batch.load(history).observations)
     task = next(iter(case.tasks))
-    # The agent proposes the most useful catalog answer; ISDE decides what is actually delivered.
-    draft = " ".join(case.clauses[key].text for key in case.tasks[task].options[0].clauses)
-    users = list(dict.fromkeys(a.user for a in case.assignments))
-    paint, results = painter(sys.stdout), []
-    if not as_json:
-        families = ", ".join(f"{name} ({family.description.rstrip('.')})" for name, family in policy.families.items())
-        print(paint(f"ISDE · {case.org}/{case.operation} · {at.isoformat()}", "1"))
-        print(f"Conclusión protegida: {families}")
-        print("El agente propone el mismo borrador a cada persona; ISDE decide qué llega a su bandeja.")
-    turns = [(user, task, at, draft, None) for user in users]
+
+    def proposal(name):
+        # The agent proposes the most useful catalog answer; ISDE decides what is actually delivered.
+        return " ".join(case.clauses[key].text for key in case.tasks[name].options[0].clauses)
+
+    turns = [(task, at, list(dict.fromkeys(a.user for a in case.assignments)),
+              "El agente propone el mismo borrador para todos:")]
     # Second turn, same answer to two vendors: only the one whose first delivery named BetaAI can combine it.
     # shortcut: the follow-up is wired to the example case; move it into the case file if more cases need one.
     if "record" in case.tasks:
-        second = " ".join(case.clauses[key].text for key in case.tasks["record"].options[0].clauses)
-        turns += [(user, "record", date(2026, 1, 5), second, f"demo_{user}_2") for user in ("ana", "luis")]
-    for number, (user, current, day, text, request_id) in enumerate(turns):
-        if number == len(users) and not as_json:
-            print("\n" + paint(f"Turno 2 · {day.isoformat()} · cada entrega anterior ya forma parte del historial", "1"))
-        result, text = story(guard, user, current, day, text, paint, request_id)
-        results.append({"user": user, "task": current, **result})
+        turns.append(("record", date(2026, 1, 5), ["ana", "luis"],
+                      "Lo entregado en el turno 1 ya es historial. Mismo borrador para ambos:"))
+    paint, results, summary = painter(sys.stdout), [], []
+    if not as_json:
+        print(paint(f"ISDE · {case.org}/{case.operation} · decide qué llega a cada bandeja", "1"))
+        for name, family in policy.families.items():
+            print(f"Conclusión protegida: {name}\n   {family.description.rstrip('.').lower()}")
+    for number, (current, day, users, note) in enumerate(turns, 1):
+        draft = proposal(current)
         if not as_json:
-            print(text)
+            print("\n" + paint(f"Turno {number} · {day.isoformat()} · tarea «{current}» · piden: {', '.join(users)}",
+                               "1") + f"\n{note}\n   «{draft}»")
+        decisions = []
+        for user in users:
+            result, text = story(guard, user, current, day, draft, paint,
+                                 f"demo_{user}" if number == 1 else f"demo_{user}_{number}")
+            results.append({"user": user, "task": current, **result})
+            decisions.append(f"{user} " + paint(*ACTIONS[result["action"]]))
+            if not as_json:
+                print(text)
+        summary.append(f"   turno {number} «{current}»: " + " · ".join(decisions))
     if as_json:
         show(results)
     else:
-        print("\n" + paint("Resumen", "1") + " · " + " · ".join(
-            f"{r['user']} ({r['task']}) {paint(ACTIONS[r['action']][0], ACTIONS[r['action']][1])}" for r in results))
+        print("\n" + paint("Resumen", "1") + "\n" + "\n".join(summary))
 
 
 def main(argv=None):
