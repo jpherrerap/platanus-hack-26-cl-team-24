@@ -16,7 +16,7 @@ python -m unittest discover -s tests -v
 
 La demo funciona sin credenciales. Para cada destinatario narra el contexto, el borrador del agente, la evaluación y lo que llega a su bandeja; `python -m isde demo --json` entrega la traza completa. El guion para presentarla está en [demo.md](demo.md).
 
-La demo muestra la divulgación acumulativa. En el turno 1, la misma respuesta («El trámite vence el viernes. El expediente O-17 corresponde a BetaAI.») se entrega completa a Ana y se repara para Luis, que ya citó la firma de O-17. En el turno 2 ambos piden «El expediente O-17 ya está firmado», inocuo por sí solo. Luis lo recibe. Para Ana queda en revisión humana: con lo que recibió en el turno 1 deduciría que la oferta para BetaAI está firmada (de 0 % a 56 %).
+La demo muestra la divulgación acumulativa. En el turno 1, la misma respuesta («El trámite vence el viernes. El expediente O-17 corresponde a BetaAI.») se entrega completa a Ana y se repara para Luis, que ya citó la firma de O-17. En el turno 2 ambos piden la tarea `record` y el agente propone «El expediente O-17 ya está firmado.», inocuo por sí solo. Luis lo recibe. Para Ana queda en revisión humana: con lo que recibió en el turno 1 deduciría que la oferta para BetaAI está firmada (de 0 % a 56 %).
 
 `python -m isde serve` abre la misma demo como página local en http://127.0.0.1:8000/ (vista previa en memoria, sin entregas; `?user=luis` preselecciona el destinatario).
 
