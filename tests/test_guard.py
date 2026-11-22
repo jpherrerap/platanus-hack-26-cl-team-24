@@ -4,6 +4,8 @@ import importlib.util
 import io
 import json
 import os
+import shutil
+import subprocess
 import tempfile
 import unittest
 from datetime import date
@@ -2083,7 +2085,7 @@ class SemanticApiTests(unittest.TestCase):
         for status in ("approved", "revise", "rejected", "delivered"):
             self.assertIn(f"[data-status={status}]", css)
 
-    def test_dashboard_has_four_tabs_preserves_controls_and_starts_without_fabricated_events(self):
+    def test_dashboard_has_five_tabs_preserves_controls_and_starts_without_fabricated_events(self):
         from html.parser import HTMLParser
         class Markup(HTMLParser):
             def __init__(self):
@@ -2096,12 +2098,13 @@ class SemanticApiTests(unittest.TestCase):
         page=self.client.get("/").text
         parsed=Markup();parsed.feed(page)
         self.assertEqual(parsed.duplicates, [])
-        for tab in ("simulation","settings","notifications","flags"):
+        for tab in ("simulation","ontology","settings","notifications","flags"):
             self.assertEqual(parsed.nodes["tab-"+tab][1]["role"], "tab")
             self.assertEqual(parsed.nodes["tab-"+tab][1]["aria-controls"], "panel-"+tab)
             self.assertEqual(parsed.nodes["panel-"+tab][1]["role"], "tabpanel")
         for name in ("source-text","preview-source","accept-source","answer","check-answer","prompt",
-                     "secret-id","secret-mode","operator-token","forget-token","notification-feed","flag-feed","event-dialog"):
+                     "secret-id","secret-mode","operator-token","forget-token","notification-feed","flag-feed","event-dialog",
+                     "graph-user","graph-svg","graph-detail"):
             self.assertIn(name, parsed.nodes)
         self.assertEqual(self.client.get("/v1/demo/events").json()["counts"]["total"], 0)
 
@@ -2829,3 +2832,27 @@ class RelationGraphTests(unittest.TestCase):
             self.assertEqual(set(response.json()), {"nodes", "edges"})
             self.assertEqual(client.get("/v1/graph?user=nadie",
                                         headers={"X-Mosaic-Operator-Token": "operator"}).status_code, 404)
+
+    @unittest.skipUnless(shutil.which("node"), "requiere node")
+    def test_dashboard_graph_layout_has_no_crossings_or_overlapping_labels(self):
+        from fastapi.testclient import TestClient
+        from isde.api import create_app
+        from isde.dashboard import PAGE
+        with tempfile.TemporaryDirectory() as folder, \
+                mock.patch.dict(os.environ, {"MOSAIC_OPERATOR_TOKEN": "operator"}, clear=True):
+            preloaded = TestClient(create_app(db=str(Path(folder) / "api.sqlite"))).get(
+                "/v1/graph", headers={"X-Mosaic-Operator-Token": "operator"}).json()
+        names = ["Alba", "revision_medica", "no_compartir_sin_autorizacion", "TOKEN_INTERNO"]
+        tree = {"nodes": [{"id": f"n{i}", "label": names[i % 4] + str(i)} for i in range(15)],
+                "edges": [{"source": f"n{i}", "target": f"n{(i - 1) // 2}", "relation": "es credencial privada"}
+                          for i in range(1, 15)]}
+        script = PAGE[PAGE.index("function shortLabel("):PAGE.index("function renderGraph(")] + """
+        const scores=JSON.parse(require('fs').readFileSync(0,'utf8')).map(g=>{
+          const ns=g.nodes.map(n=>({...n})),by=new Map(ns.map(n=>[n.id,n]));
+          const edges=g.edges.map(e=>({...e,s:by.get(e.source),t:by.get(e.target)}));
+          measureGraph(ns,edges);return layoutGraph(ns,edges,450,300)});
+        console.log(JSON.stringify(scores))"""
+        result = subprocess.run(["node", "-e", script], input=json.dumps([preloaded, tree]),
+                                capture_output=True, text=True, check=True)
+        self.assertTrue(preloaded["edges"])
+        self.assertEqual(json.loads(result.stdout), [{"crossings": 0, "overlaps": 0}] * 2)
