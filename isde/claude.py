@@ -145,6 +145,21 @@ def _request(role, context, schema, client, model):
         request["tools"] = [{"name": "select_evidence", "description": "Devuelve la evidencia según el esquema.",
                              "input_schema": schema.model_json_schema()}]
         request["tool_choice"] = {"type": "tool", "name": "select_evidence"}
+    for attempt in range(2):
+        try:
+            return _response(_create(client, request, structured_output, model), schema, structured_output)
+        except ValidationError as exc:
+            detail = _validation_detail(schema, exc)
+            if not structured_output or attempt:
+                raise ValueError(("Claude devolvió una salida JSON que no cumple la validación local"
+                                  if structured_output else "Claude devolvió una selección con formato inválido") +
+                                 f" ({detail})") from exc
+            # Anthropic cannot enforce every local rule, so name the failing paths once and let the model fix them.
+            request["system"] += (" Tu respuesta anterior no pasó la validación local en " + detail +
+                                  ". Corrige esos campos respetando las restricciones de cada descripción del esquema.")
+
+
+def _create(client, request, structured_output, model):
     try:
         response = client.messages.create(**request)
         if structured_output and response.stop_reason == "max_tokens":
@@ -152,6 +167,10 @@ def _request(role, context, schema, client, model):
             response = client.messages.create(**request)
     except Exception as exc:
         raise _api_error(exc, model) from exc
+    return response
+
+
+def _response(response, schema, structured_output):
     if structured_output:
         if response.stop_reason == "refusal":
             details = getattr(response, "stop_details", None)
@@ -165,37 +184,44 @@ def _request(role, context, schema, client, model):
         if len(blocks) != 1:
             raise ValueError("Claude devolvió " + str(len(blocks)) + " bloques de texto estructurado" +
                              f" (stop_reason={response.stop_reason}); no se guardó la fuente")
-        try:
-            return schema.model_validate_json(blocks[0].text)
-        except ValidationError as exc:
-            raise ValueError("Claude devolvió una salida JSON que no cumple la validación local") from exc
+        return schema.model_validate_json(blocks[0].text)
     blocks = [b for b in response.content if b.type == "tool_use" and b.name == "select_evidence"]
     if len(blocks) != 1 or response.stop_reason != "tool_use":
         raise ValueError("Claude no llamó select_evidence o no devolvió una selección completa; se descartó la respuesta")
-    try:
-        return schema.model_validate(blocks[0].input)
-    except ValidationError as exc:
-        # Model output is untrusted: reject it whole and never echo it back to the terminal.
-        raise ValueError("Claude devolvió una selección con formato inválido") from exc
+    return schema.model_validate(blocks[0].input)
+
+
+def _validation_detail(schema, exc):
+    """Name schema, field paths and rule types only: model output is untrusted and may carry private text."""
+    errors = exc.errors(include_url=False, include_context=False, include_input=False)
+    # A key invented by the model could hold source text, so only plain identifiers and indices are shown.
+    paths = [".".join(str(p) if isinstance(p, int) or (p.isidentifier() and len(p) <= 40) else "?"
+                       for p in e["loc"]) or "(raíz)" for e in errors]
+    shown = "; ".join(f"{path} [{e['type']}]" for path, e in zip(paths[:5], errors))
+    return f"esquema {schema.__name__}: {shown}" + (f"; y {len(errors) - 5} más" if len(errors) > 5 else "")
 
 
 def _anthropic_output_schema(node):
-    """Keep structural schema validation at Anthropic and full Pydantic validation locally."""
+    """Anthropic can't enforce these rules, so they travel as descriptions and Pydantic still enforces them."""
     if isinstance(node, list):
         return [_anthropic_output_schema(item) for item in node]
     if not isinstance(node, dict):
         return node
-    result = {}
+    result, rules = {}, []
     for key, value in node.items():
         if key in {"maximum", "minimum", "exclusiveMaximum", "exclusiveMinimum", "multipleOf",
-                   "pattern", "minLength", "maxLength", "maxItems", "uniqueItems"}:
+                   "pattern", "minLength", "maxLength", "maxItems", "uniqueItems"} or (key == "minItems" and value > 1):
+            rules.append(f"{key}={json.dumps(value, ensure_ascii=False)}")
             continue
         if key == "prefixItems":
-            result["items"] = {"type": "string"}
-            continue
-        if key == "minItems" and value > 1:
+            same = all(item == value[0] for item in value)
+            result["items"] = _anthropic_output_schema(value[0]) if same else {"type": "string"}
+            if not same:
+                rules.append("prefixItems=" + json.dumps(value, ensure_ascii=False))
             continue
         result[key] = _anthropic_output_schema(value)
+    if rules:
+        result["description"] = (node.get("description", "") + " Reglas validadas localmente: " + ", ".join(rules)).strip()
     return result
 
 
@@ -339,7 +365,7 @@ def propose(policy: Policy, source: Source, grade: Grade | None = None, *, graph
         try:
             result = _request(role + correction, context, schema, client, model)
         except ValueError as exc:
-            if attempt == 0 and str(exc) == "Claude devolvió una selección con formato inválido":
+            if attempt == 0 and str(exc).startswith("Claude devolvió una selección con formato inválido"):
                 correction = " Reintenta respetando exactamente el esquema de salida y los identificadores válidos."
                 continue
             raise
