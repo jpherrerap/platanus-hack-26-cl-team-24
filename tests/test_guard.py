@@ -1780,6 +1780,42 @@ class SemanticApiTests(unittest.TestCase):
                      "question":"¿Cuándo vence el trámite?",
                      "text":"El plazo acaba el viernes. O-17 pertenece a BetaAI."}
 
+    def test_email_task_decides_by_inference_risk_only(self):
+        from fastapi.testclient import TestClient
+        from isde.api import create_app
+        from isde.semantic import DraftAssessment
+        sane = "Asunto: Info O-17\n\nYa hablé con el jefe, no necesitamos que nos mandes nada. ¡Buen finde!"
+        leak = "Asunto: Buenas noticias\n\nBetaAI ya firmó lo de O-17."
+
+        class Model:
+            # Neither email maps to the vocabulary or answers a task; only the adversary tells them apart.
+            def analyze(self, policy, text, question):
+                return DraftAssessment(facts=[], covers_all_claims=False, fulfills_task=False)
+
+            def adversarial(self, policy, text, view):
+                if "firmó" not in text:
+                    return []
+                return [Hypothesis(claim=("betaai", "offer_status", "signed"), quote="BetaAI ya firmó", p_if_seen=.9)]
+
+        with mock.patch.dict(os.environ, {"MOSAIC_OPERATOR_TOKEN": "secreto"}):
+            client = TestClient(create_app(db=str(Path(self.tmp.name) / "email.sqlite"), model=Model()))
+        base = {"user": "luis", "day": "2026-01-04", "question": "Info O-17"}
+        approved = client.post("/v1/reviews", json={**base, "review_id": "m1_luis", "task": "email", "text": sane})
+        self.assertEqual(approved.json()["status"], "approved", approved.text)
+        delivered = client.post("/v1/reviews/m1_luis/deliver", json={"user": "luis"}).json()
+        self.assertEqual(delivered["action"], "allow")
+        self.assertEqual(client.get("/v1/inbox/luis").json()["messages"][-1]["text"], sane)
+        # The same text as an agent answer to a case task keeps the fail-closed gates.
+        agent = client.post("/v1/reviews", json={**base, "review_id": "a1_luis", "task": "due", "text": sane})
+        self.assertEqual(agent.json()["status"], "revise")
+        blocked = client.post("/v1/reviews", json={**base, "review_id": "m2_luis", "task": "email", "text": leak})
+        self.assertEqual(blocked.json()["status"], "revise")
+        self.assertEqual(client.post("/v1/reviews/m2_luis/deliver", json={"user": "luis"}).status_code, 400)
+        self.assertEqual(len(client.get("/v1/inbox/luis").json()["messages"]), 1)
+        kinds = {e["title"]: (e["kind"], e["status"]) for e in client.get("/v1/demo/events").json()["events"]}
+        self.assertEqual(kinds["Se aprobó una respuesta sin riesgo detectado"], ("allowed", "approved"))
+        self.assertEqual(kinds["Se bloqueó una posible filtración de información"], ("blocked", "open"))
+
     def test_dashboard_persists_prompts_secrets_and_role_grants(self):
         from fastapi.testclient import TestClient
         from isde.api import create_app

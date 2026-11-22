@@ -7,7 +7,7 @@ from typing import TypedDict
 from langgraph.graph import END, START, StateGraph
 
 from .model import Hypothesis
-from .semantic import DraftAssessment, inspect_graph, score_candidate
+from .semantic import FREE_TASKS, DraftAssessment, inspect_graph, score_candidate
 from .claude import model_id
 from .media import with_attachments
 from . import events
@@ -20,9 +20,9 @@ def encode(value):
 def review(guard, model, review_id, user, task, day, text, question, *, revision=False, revision_id=None, attachments=()):
     if user not in {a.user for a in guard.case.assignments if (a.org, a.operation) == guard.scope}:
         raise ValueError("Destinatario fuera del directorio")
-    if not revision and task != "freeform" and task not in guard.case.tasks:
+    if not revision and task not in FREE_TASKS and task not in guard.case.tasks:
         raise ValueError("Tarea desconocida")
-    if not revision and task == "freeform" and not question.strip():
+    if not revision and task in FREE_TASKS and not question.strip():
         raise ValueError("La tarea libre requiere una pregunta")
     # Attachment hashes join only when present so earlier review identities stay valid.
     digests = [[a.digest() for a in attachments]] if attachments else []

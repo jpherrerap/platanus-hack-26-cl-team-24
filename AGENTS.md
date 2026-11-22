@@ -25,6 +25,7 @@ isde demo                                 # caso ficticio en memoria
 ## Invariantes
 
 - Nada llega a la bandeja sin pasar por `Guard._decide`. Si ninguna alternativa es admisible, la decisión es `review`.
+- En `/v1/reviews`, la tarea `email` (correos humanos) decide solo por riesgo de inferencia: hipótesis del adversario, ProbLog y hechos protegidos sin respaldo. No exige cubrir todas las afirmaciones ni responder una tarea. Las respuestas de agente siguen fallando cerrado.
 - La salida de Claude es una propuesta. Cada triple exige una cita literal de la fuente y predicados y estados del vocabulario de la política.
 - El contexto de un observador nunca incluye el grafo interno, las asignaciones ni otros destinatarios (`Guard.model_context`).
 - Las entregas son idempotentes por `request_id` y respetan el orden del historial. Los registros de entrega no se reescriben.
