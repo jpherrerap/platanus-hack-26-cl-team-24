@@ -128,14 +128,11 @@ function shortLabel(text){return text.length>26?text.slice(0,25)+'…':text}
 function graphUsers(){$('graph-user').replaceChildren(new Option('Grafo interno',''),...config.users.map(u=>new Option('Lo que puede saber '+u,u)))}
 async function loadGraph(){const user=$('graph-user').value;message('graph-msg','');try{drawGraph(await operatorRequest('/v1/graph'+(user?'?user='+encodeURIComponent(user):'')))}catch(e){message('graph-msg',e.message,true);drawGraph({nodes:[],edges:[]})}}
 function drawGraph(data){
-  const svg=$('graph-svg'),W=svg.clientWidth||900,H=svg.clientHeight||600,old=graphView.byId,degree={},fresh=!old.size;
-  for(const e of data.edges)for(const id of [e.source,e.target])degree[id]=(degree[id]||0)+1;
-  graphView.nodes=data.nodes.map((n,i)=>{const prev=old.get(n.id),angle=i/data.nodes.length*2*Math.PI,spread=Math.min(W,H)/3;return {...n,r:Math.min(30,15+4*Math.sqrt(degree[n.id]||0)),x:prev?prev.x:W/2+Math.cos(angle)*spread,y:prev?prev.y:H/2+Math.sin(angle)*spread,vx:0,vy:0}});
+  const svg=$('graph-svg'),W=svg.clientWidth||900,H=svg.clientHeight||600,old=graphView.byId,fresh=!old.size;
+  graphView.nodes=data.nodes.map((n,i)=>{const prev=old.get(n.id),angle=i/data.nodes.length*2*Math.PI,spread=Math.min(W,H)/3;return {...n,x:prev?prev.x:W/2+Math.cos(angle)*spread,y:prev?prev.y:H/2+Math.sin(angle)*spread,vx:0,vy:0}});
   graphView.byId=new Map(graphView.nodes.map(n=>[n.id,n]));
   graphView.edges=data.edges.filter(e=>graphView.byId.has(e.source)&&graphView.byId.has(e.target)).map(e=>({...e,s:graphView.byId.get(e.source),t:graphView.byId.get(e.target)}));
-  // Bend parallel relations between the same pair apart so their labels stay readable.
-  const lanes={};for(const e of graphView.edges){const key=[e.source,e.target].sort().join('\u0001');(lanes[key]=lanes[key]||[]).push(e)}
-  for(const group of Object.values(lanes))group.forEach((e,i)=>{e.offset=(i-(group.length-1)/2)*44*(e.source<e.target?1:-1)});
+  measureGraph(graphView.nodes,graphView.edges);
   const edgeLayer=$('graph-edges'),nodeLayer=$('graph-nodes');edgeLayer.replaceChildren();nodeLayer.replaceChildren();
   for(const e of graphView.edges){e.el=svgEl('g',{class:'g-edge'},edgeLayer);e.path=svgEl('path',{'marker-end':'url(#arrow)'},e.el);e.label=svgEl('text',{'text-anchor':'middle',dy:'-4'},e.el);e.label.textContent=shortLabel(e.relation);svgEl('title',{},e.el).textContent=e.relation+(e.quote?' · «'+e.quote+'»':'')}
   for(const n of graphView.nodes){const color=typeColor(n.type);n.el=svgEl('g',{class:'g-node',tabindex:'0',role:'button','data-id':n.id,'aria-label':n.label+', '+n.type},nodeLayer);svgEl('circle',{class:'halo',r:n.r+6,stroke:color},n.el);svgEl('circle',{class:'core',r:n.r,fill:color},n.el);svgEl('text',{class:'initial','text-anchor':'middle',dy:'.35em'},n.el).textContent=(n.label[0]||'?').toUpperCase();svgEl('text',{class:'name','text-anchor':'middle',y:n.r+17},n.el).textContent=shortLabel(n.label);svgEl('title',{},n.el).textContent=n.label;n.el.onkeydown=ev=>{if(ev.key==='Enter'||ev.key===' '){ev.preventDefault();selectNode(n.id)}}}
@@ -144,25 +141,81 @@ function drawGraph(data){
   const origins=new Set(graphView.edges.map(e=>e.origin)).size;
   $('graph-stats').textContent=graphView.nodes.length+' entidades · '+graphView.edges.length+' relaciones · '+origins+' fuente'+(origins===1?'':'s');
   $('graph-empty').hidden=graphView.nodes.length>0;
-  if(fresh){graphView.alpha=1;while(graphView.alpha>.01)tickGraph()}
+  if(fresh)graphView.layout=layoutGraph(graphView.nodes,graphView.edges,W/2,H/2);
   renderGraph();if(fresh)fitGraph();selectNode(graphView.byId.has(graphView.selected)?graphView.selected:null);if(!fresh)heatGraph(.6);markMatches()}
-function heatGraph(a){graphView.alpha=Math.max(graphView.alpha,a);if(matchMedia('(prefers-reduced-motion: reduce)').matches){while(graphView.alpha>.01)tickGraph();renderGraph();return}if(!graphView.raf)graphView.raf=requestAnimationFrame(stepGraph)}
-function stepGraph(){graphView.raf=0;tickGraph();renderGraph();if(graphView.alpha>.01)graphView.raf=requestAnimationFrame(stepGraph)}
+function graphCenter(){const svg=$('graph-svg');return [(svg.clientWidth||900)/2,(svg.clientHeight||600)/2]}
+function coolGraph(){tickGraph(graphView.nodes,graphView.edges,graphView.alpha,...graphCenter(),graphView.gravity);graphView.alpha*=.975}
+function heatGraph(a){graphView.alpha=Math.max(graphView.alpha,a);if(matchMedia('(prefers-reduced-motion: reduce)').matches){while(graphView.alpha>.01)coolGraph();renderGraph();return}if(!graphView.raf)graphView.raf=requestAnimationFrame(stepGraph)}
+function stepGraph(){graphView.raf=0;coolGraph();renderGraph();if(graphView.alpha>.01)graphView.raf=requestAnimationFrame(stepGraph)}
+function measureGraph(ns,edges){
+  const degree=new Map();for(const e of edges)for(const n of [e.s,e.t])degree.set(n,(degree.get(n)||0)+1);
+  for(const n of ns){n.r=Math.min(30,15+4*Math.sqrt(degree.get(n)||0));n.w=shortLabel(n.label).length*7.6+8}
+  // Bend parallel relations between the same pair apart so their labels stay readable.
+  const lanes={};for(const e of edges){e.w=shortLabel(e.relation).length*6.9+8;const key=[e.source,e.target].sort().join('\u0001');(lanes[key]=lanes[key]||[]).push(e)}
+  for(const group of Object.values(lanes))group.forEach((e,i)=>{e.offset=(i-(group.length-1)/2)*44*(e.source<e.target?1:-1)})}
+function seeded(seed){return ()=>{seed=seed+0x6D2B79F5|0;let t=Math.imul(seed^seed>>>15,1|seed);t=t+Math.imul(t^t>>>7,61|t)^t;return ((t^t>>>14)>>>0)/4294967296}}
+function edgeCurve(e){const s=e.s,t=e.t;if(s===t)return {mx:s.x,my:s.y,lx:s.x,ly:s.y-s.r*2.9};const dx=t.x-s.x,dy=t.y-s.y,d=Math.hypot(dx,dy)||1,mx=(s.x+t.x)/2-dy/d*e.offset,my=(s.y+t.y)/2+dx/d*e.offset;return {mx,my,lx:(s.x+2*mx+t.x)/4,ly:(s.y+2*my+t.y)/4}}
+function nodeBox(n){const w=Math.max(2*n.r,n.w)/2;return {x0:n.x-w,x1:n.x+w,y0:n.y-n.r,y1:n.y+n.r+22}}
+function edgeBox(e){const c=edgeCurve(e);return {x0:c.lx-e.w/2,x1:c.lx+e.w/2,y0:c.ly-17,y1:c.ly+1}}
+function overlaps(p,q){return Math.min(p.x1,q.x1)>Math.max(p.x0,q.x0)&&Math.min(p.y1,q.y1)>Math.max(p.y0,q.y0)}
+function crosses(a,b,c,d){const side=(p,q,r)=>Math.sign((q.x-p.x)*(r.y-p.y)-(q.y-p.y)*(r.x-p.x));return side(a,b,c)*side(a,b,d)<0&&side(c,d,a)*side(c,d,b)<0}
+function touches(n,a,b){const dx=b.x-a.x,dy=b.y-a.y,k=Math.max(0,Math.min(1,((n.x-a.x)*dx+(n.y-a.y)*dy)/(dx*dx+dy*dy||1)));return Math.hypot(a.x+k*dx-n.x,a.y+k*dy-n.y)<n.r+4}
+function layoutScore(ns,edges){
+  let crossings=0,overlapping=0;const lines=edges.filter(e=>e.s!==e.t);
+  for(let i=0;i<lines.length;i++){const e=lines[i];
+    for(let j=i+1;j<lines.length;j++){const f=lines[j];if(e.s!==f.s&&e.s!==f.t&&e.t!==f.s&&e.t!==f.t&&crosses(e.s,e.t,f.s,f.t))crossings++}
+    for(const n of ns)if(n!==e.s&&n!==e.t&&touches(n,e.s,e.t))crossings++}
+  const boxes=[...ns.map(nodeBox),...edges.map(edgeBox)];
+  for(let i=0;i<boxes.length;i++)for(let j=i+1;j<boxes.length;j++)if(overlaps(boxes[i],boxes[j]))overlapping++;
+  return {crossings,overlaps:overlapping}}
+function radialSeed(ns,edges,cx,cy,rand,shuffle){
+  // A radial tree from a hub is planar for trees and a good start for sparse graphs, which forces alone rarely untangle.
+  const adj=new Map(ns.map(n=>[n,new Set()]));for(const e of edges)if(e.s!==e.t){adj.get(e.s).add(e.t);adj.get(e.t).add(e.s)}
+  const mix=list=>{for(let i=list.length-1;i>0;i--){const j=Math.floor(rand()*(i+1));[list[i],list[j]]=[list[j],list[i]]}return list};
+  const seen=new Set(),kids=new Map(),roots=[],hubs=[...ns].sort((p,q)=>adj.get(q).size-adj.get(p).size);
+  if(shuffle)mix(hubs);
+  for(const root of hubs){if(seen.has(root))continue;roots.push(root);seen.add(root);const queue=[root];
+    while(queue.length){const n=queue.shift(),next=[...adj.get(n)].filter(m=>!seen.has(m));for(const m of next)seen.add(m);kids.set(n,shuffle?mix(next):next);queue.push(...next)}}
+  const size=new Map(),leaves=n=>{if(!size.has(n))size.set(n,kids.get(n).reduce((sum,m)=>sum+leaves(m),0)||1);return size.get(n)};
+  const ring=Math.max(...ns.map(n=>Math.max(2*n.r,n.w)),...edges.map(e=>e.w))+90,base=roots.length>1?.8:0;
+  const place=(n,depth,from,to)=>{const angle=(from+to)/2;n.x=cx+Math.cos(angle)*depth*ring;n.y=cy+Math.sin(angle)*depth*ring;n.vx=n.vy=0;let at=from;
+    for(const m of kids.get(n)){const span=(to-from)*leaves(m)/leaves(n);place(m,depth+1,at,at+span);at+=span}};
+  const total=roots.reduce((sum,n)=>sum+leaves(n),0);let at=rand()*2*Math.PI;
+  for(const root of roots){const span=2*Math.PI*leaves(root)/total;place(root,base,at,at+span);at+=span}}
+function layoutGraph(ns,edges,cx,cy){
+  // A single force run often settles with crossings or stacked labels; restart from seeded placements and keep the cleanest.
+  const rand=seeded(ns.length*31+edges.length),deadline=Date.now()+600;let best=null;
+  for(let attempt=0;attempt<(ns.length>120?4:24);attempt++){
+    const gravity=[.1,.05,.025,.012][attempt%4];radialSeed(ns,edges,cx,cy,rand,attempt>3);
+    for(let a=.5;a>.01;a*=.98)tickGraph(ns,edges,a,cx,cy,gravity);
+    for(let i=0;i<40;i++)tickGraph(ns,edges,.02,cx,cy,gravity);
+    // Uniform scaling keeps crossings unchanged but separates fixed-size labels, so grow until nothing overlaps.
+    let score=layoutScore(ns,edges);
+    for(let grow=0;grow<10&&score.overlaps;grow++){const mx=ns.reduce((sum,n)=>sum+n.x,0)/ns.length,my=ns.reduce((sum,n)=>sum+n.y,0)/ns.length;for(const n of ns){n.x=mx+(n.x-mx)*1.08;n.y=my+(n.y-my)*1.08}score=layoutScore(ns,edges)}
+    // Among equally clean layouts prefer the one that fits the stage at the largest zoom, so text stays legible.
+    const cost=2*score.crossings+score.overlaps,xs=ns.map(n=>n.x),ys=ns.map(n=>n.y),
+      zoom=Math.min(2*cx/(Math.max(...xs)-Math.min(...xs)+140),2*cy/(Math.max(...ys)-Math.min(...ys)+140));
+    if(zoom>0&&(!best||cost<best.cost||cost===best.cost&&zoom>best.zoom))best={cost,zoom,score,at:ns.map(n=>[n.x,n.y])};if(Date.now()>deadline)break}
+  if(!best)return {crossings:0,overlaps:0};ns.forEach((n,i)=>{[n.x,n.y]=best.at[i]});return best.score}
 // shortcut: O(n²) repulsion stays smooth up to ~200 nodes; switch to a quadtree (Barnes-Hut) if graphs grow past that.
-function tickGraph(){
-  const ns=graphView.nodes,a=graphView.alpha,svg=$('graph-svg'),cx=(svg.clientWidth||900)/2,cy=(svg.clientHeight||600)/2;
-  for(let i=0;i<ns.length;i++)for(let j=i+1;j<ns.length;j++){const p=ns[i],q=ns[j];let dx=q.x-p.x,dy=q.y-p.y,d2=dx*dx+dy*dy;if(d2<1){dx=Math.random()-.5;dy=Math.random()-.5;d2=1}if(d2>360000)continue;const d=Math.sqrt(d2),f=16000/d2*a;p.vx-=dx/d*f;p.vy-=dy/d*f;q.vx+=dx/d*f;q.vy+=dy/d*f}
-  for(const e of graphView.edges){if(e.s===e.t)continue;const dx=e.t.x-e.s.x,dy=e.t.y-e.s.y,d=Math.hypot(dx,dy)||1,f=(d-200)*.06*a,fx=dx/d*f,fy=dy/d*f;e.s.vx+=fx;e.s.vy+=fy;e.t.vx-=fx;e.t.vy-=fy}
-  for(const n of ns){n.vx=(n.vx+(cx-n.x)*.008*a)*.55;n.vy=(n.vy+(cy-n.y)*.008*a)*.55;if(!n.fixed){n.x+=n.vx;n.y+=n.vy}}
-  graphView.alpha*=.975}
+function tickGraph(ns,edges,a,cx,cy,gravity=.012){
+  for(let i=0;i<ns.length;i++)for(let j=i+1;j<ns.length;j++){const p=ns[i],q=ns[j];let dx=q.x-p.x,dy=q.y-p.y,d2=dx*dx+dy*dy;if(d2<1){dx=Math.random()-.5;dy=Math.random()-.5;d2=1}const d=Math.sqrt(d2),f=12000/d2*a;p.vx-=dx/d*f;p.vy-=dy/d*f;q.vx+=dx/d*f;q.vy+=dy/d*f}
+  // Rest length depends on direction: a horizontal edge must clear the wide name boxes and its own label, a vertical one only their height.
+  for(const e of edges){if(e.s===e.t)continue;const dx=e.t.x-e.s.x,dy=e.t.y-e.s.y,d=Math.hypot(dx,dy)||1,ux=Math.abs(dx/d),uy=Math.abs(dy/d),reach=n=>ux*Math.max(n.r,n.w/2)+uy*(n.r+22),
+    rest=Math.max(120,2*(Math.max(reach(e.s),reach(e.t))+ux*e.w/2+uy*10)+10),f=(d-rest)*.06*a,fx=dx/d*f,fy=dy/d*f;e.s.vx+=fx;e.s.vy+=fy;e.t.vx-=fx;e.t.vy-=fy}
+  for(const n of ns){n.vx=(n.vx+(cx-n.x)*gravity*a)*.55;n.vy=(n.vy+(cy-n.y)*gravity*a)*.55;if(!n.fixed){n.x+=n.vx;n.y+=n.vy}}
+  // Center repulsion ignores label width, so separate overlapping name boxes along their shallower axis.
+  for(let i=0;i<ns.length;i++)for(let j=i+1;j<ns.length;j++){const p=ns[i],q=ns[j],P=nodeBox(p),Q=nodeBox(q),ox=Math.min(P.x1,Q.x1)-Math.max(P.x0,Q.x0)+10,oy=Math.min(P.y1,Q.y1)-Math.max(P.y0,Q.y0)+10;if(ox<=0||oy<=0)continue;
+    const [mx,my]=ox<oy?[(p.x<q.x?-1:1)*ox/4,0]:[0,(p.y<q.y?-1:1)*oy/4];if(!p.fixed){p.x+=mx;p.y+=my}if(!q.fixed){q.x-=mx;q.y-=my}}
+  for(const e of edges){const L=edgeBox(e),lx=(L.x0+L.x1)/2,ly=(L.y0+L.y1)/2;for(const n of ns){if(n===e.s||n===e.t||n.fixed)continue;const N=nodeBox(n),ox=Math.min(L.x1,N.x1)-Math.max(L.x0,N.x0)+8,oy=Math.min(L.y1,N.y1)-Math.max(L.y0,N.y0)+8;if(ox<=0||oy<=0)continue;
+    if(ox<oy)n.x+=(n.x<lx?-1:1)*ox/3;else n.y+=(n.y<ly?-1:1)*oy/3}}}
 function renderGraph(){
   for(const n of graphView.nodes)n.el.setAttribute('transform','translate('+n.x+','+n.y+')');
-  for(const e of graphView.edges){const s=e.s,t=e.t;
-    if(s===t){const r=s.r;e.path.setAttribute('d','M'+(s.x-r*.6)+','+(s.y-r*.8)+'C'+(s.x-r*2.2)+','+(s.y-r*3.6)+' '+(s.x+r*2.2)+','+(s.y-r*3.6)+' '+(s.x+r*.6)+','+(s.y-r*.8));e.label.setAttribute('x',s.x);e.label.setAttribute('y',s.y-r*2.9);continue}
-    const dx=t.x-s.x,dy=t.y-s.y,d=Math.hypot(dx,dy)||1,mx=(s.x+t.x)/2-dy/d*e.offset,my=(s.y+t.y)/2+dx/d*e.offset;
+  for(const e of graphView.edges){const s=e.s,t=e.t,{mx,my,lx,ly}=edgeCurve(e);e.label.setAttribute('x',lx);e.label.setAttribute('y',ly);
+    if(s===t){const r=s.r;e.path.setAttribute('d','M'+(s.x-r*.6)+','+(s.y-r*.8)+'C'+(s.x-r*2.2)+','+(s.y-r*3.6)+' '+(s.x+r*2.2)+','+(s.y-r*3.6)+' '+(s.x+r*.6)+','+(s.y-r*.8));continue}
     const a=Math.hypot(s.x-mx,s.y-my)||1,b=Math.hypot(t.x-mx,t.y-my)||1;
     const x0=s.x+(mx-s.x)/a*s.r,y0=s.y+(my-s.y)/a*s.r,x1=t.x+(mx-t.x)/b*(t.r+5),y1=t.y+(my-t.y)/b*(t.r+5);
-    e.path.setAttribute('d','M'+x0+','+y0+'Q'+mx+','+my+' '+x1+','+y1);e.label.setAttribute('x',(s.x+2*mx+t.x)/4);e.label.setAttribute('y',(s.y+2*my+t.y)/4)}}
+    e.path.setAttribute('d','M'+x0+','+y0+'Q'+mx+','+my+' '+x1+','+y1)}}
 function applyView(){const v=graphView.view;$('graph-viewport').setAttribute('transform','translate('+v.x+','+v.y+') scale('+v.k+')')}
 function zoomAt(k,mx,my){const v=graphView.view;k=Math.min(4,Math.max(.25,k));v.x=mx-(mx-v.x)*k/v.k;v.y=my-(my-v.y)*k/v.k;v.k=k;applyView()}
 function fitGraph(){const ns=graphView.nodes,svg=$('graph-svg'),W=svg.clientWidth,H=svg.clientHeight,v=graphView.view;if(!ns.length||!W){v.x=v.y=0;v.k=1;applyView();return}
