@@ -399,6 +399,16 @@ class Guard:
         return [(origin, tuple(json.loads(fact)), min(cap, self.policy.evidence.get(grade, 1.)))
                 for origin, fact, grade, cap in rows]
 
+    def seen_quotes(self, user, at):
+        """Texts the recipient already saw as evidence (sources sent to them, released mail), oldest first."""
+        rows = self.db.execute("""
+            SELECT quote FROM (SELECT quote,day FROM evidence WHERE org=? AND op=? AND audience=? AND day<=?
+                               UNION ALL
+                               SELECT quote,day FROM interpretations WHERE org=? AND op=? AND audience=? AND day<=?)
+            WHERE quote IS NOT NULL GROUP BY quote ORDER BY min(day),quote
+        """, (*self.scope, user, at.isoformat()) * 2)
+        return [quote for (quote,) in rows]
+
     def proposed_rules(self, at):
         rows = self.db.execute("""
             SELECT origin,day,rule,quote,confidence,assessor FROM proposed_rules

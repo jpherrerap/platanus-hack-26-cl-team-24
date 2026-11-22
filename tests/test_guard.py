@@ -756,6 +756,13 @@ class SeededEventsTests(unittest.TestCase):
                                headers={"X-Mosaic-Operator-Token": "operator"}).json()
             self.assertEqual(event["status"], "resolved")
             self.assertTrue(event["resolution_note"])
+            guard = Guard(path, Policy.load(ROOT / "mvp-policy.yaml"), Case.load(ROOT / "vacuna-case.yaml"))
+            try:  # Luis's earlier mail is the history the secret judge combines with a new draft.
+                seen = guard.seen_quotes("luis", date(2026, 11, 22))
+                self.assertEqual([q.splitlines()[0] for q in seen], ["Asunto: Pedido a imprenta", "Asunto: Viajes de diciembre"])
+                self.assertEqual(guard.seen_quotes("ana", date(2026, 11, 22)), [])
+            finally:
+                guard.close()
         # A seeded notification is always settled: it can never pose as a pending alert.
         with self.assertRaises(Exception):
             PastEvents.model_validate({"events": [{"kind": "blocked", "title": "x", "target_type": "review",
@@ -1036,6 +1043,27 @@ class ConfidentialityTests(unittest.TestCase):
         self.assertEqual(review(Model(.9))["action"], "allow")  # Nothing judged: the draft passes.
         with self.assertRaisesRegex(ValueError, "sin conexión"):
             review(Model(ValueError("sin conexión")))
+
+    def test_secret_judge_sees_what_the_recipient_already_received(self):
+        from isde.semantic import DraftFacts, inspect_graph
+        self.secret_graph()
+        seen = "El equipo viaja a Lima cada dos semanas."
+        self.guard.observe([Observation(origin="correo_previo", at=DAY, user="usuario_demo", grade="delivered",
+                                        facts=[("equipo", "tipo", "farmaco")], quote=seen)])
+        histories = []
+
+        class Model:
+            def analyze(self, policy, text, question):
+                return DraftFacts(facts=[])
+            def adversarial(self, policy, text, view):
+                return []
+            def secrets(self, secrets, text, history):
+                histories.append(history)
+                return []
+        for user in ("usuario_demo", "revisor_demo"):
+            state = {"user":user, "task":"email", "question":"q", "day":DAY, "text":"Hola."}
+            inspect_graph(self.guard, Model()).invoke(state)
+        self.assertEqual(histories, [[seen], []])
 
     def test_existing_database_gains_the_confidentiality_column(self):
         import sqlite3
