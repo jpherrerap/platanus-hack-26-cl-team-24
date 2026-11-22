@@ -144,7 +144,7 @@ curl -X POST http://127.0.0.1:8001/v1/messages \
   -d '{"user":"luis","task":"due","day":"2026-01-04","request_id":"solicitud-1","draft":"El trámite vence el viernes. El expediente O-17 corresponde a BetaAI."}'
 ```
 
-La respuesta contiene `request_id`, `action` y `text`. Los estados son `allow`, `repair` y `review`. Si queda en revisión, `text` es `null`. La bandeja simulada se consulta con `GET /v1/inbox/luis`. El destinatario solo ve las entregas confirmadas. Repetir el identificador con la misma solicitud recupera el resultado anterior. Para una nueva evaluación, usa otro identificador.
+La respuesta contiene `request_id`, `action` y `text`. Los estados son `allow`, `repair` y `review`; no existe `block`: bloquear es `review` y nada llega a la bandeja. Si queda en revisión, `text` es `null`. La bandeja simulada se consulta con `GET /v1/inbox/luis`. El destinatario solo ve las entregas confirmadas. Repetir el identificador con la misma solicitud recupera el resultado anterior. Para una nueva evaluación, usa otro identificador.
 
 Un adaptador de confianza puede registrar información recibida con `POST /v1/observations`, usando el mismo formato de `examples/history.yaml`. La API persiste evidencia y entregas en `mosaic-api.sqlite` por defecto. La ruta puede cambiarse con `MOSAIC_API_DB` o `ISDE_API_DB`. Los archivos de política, caso e historial inicial pueden sustituirse con `MOSAIC_POLICY`, `MOSAIC_CASE` y `MOSAIC_HISTORY`, o sus equivalentes con prefijo `ISDE_`.
 
