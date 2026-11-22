@@ -2073,6 +2073,16 @@ class SemanticApiTests(unittest.TestCase):
         self.assertEqual(current["vocabulary"]["paso_intermedio"], "Paso")
         self.assertNotIn("artificial", current["grants"]["legal"])
 
+    def test_dashboard_presentation_mode_shows_only_the_answer_flow(self):
+        page = self.client.get("/").text
+        self.assertIn('href="?presentar"', page)
+        self.assertIn("has('presentar')", page)
+        css = page[page.index("body.present{"):page.index("</style>")]
+        for hidden in ("#panel-simulation .grid>div:first-child", ".sidebar", ".metrics", "details.technical"):
+            self.assertIn(hidden, css)
+        for status in ("approved", "revise", "rejected", "delivered"):
+            self.assertIn(f"[data-status={status}]", css)
+
     def test_dashboard_has_four_tabs_preserves_controls_and_starts_without_fabricated_events(self):
         from html.parser import HTMLParser
         class Markup(HTMLParser):

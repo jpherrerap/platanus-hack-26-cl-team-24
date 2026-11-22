@@ -8,7 +8,7 @@ mosaic key
 python -m uvicorn isde.api:create_app --factory --host 127.0.0.1 --port 8001
 ```
 
-Abre http://127.0.0.1:8001/. En vez del llavero también puedes configurar `ANTHROPIC_API_KEY` en el entorno. Las llamadas para analizar fuentes o respuestas usan Claude y pueden tener costo. El panel es para una integración de confianza en un proceso local: no lo publiques en red sin autenticación y control de acceso.
+Abre http://127.0.0.1:8001/. En vez del llavero también puedes configurar `ANTHROPIC_API_KEY` en el entorno. Las llamadas para analizar fuentes o respuestas usan Claude y pueden tener costo. El panel es para una integración de confianza en un proceso local: no lo publiques en red sin autenticación y control de acceso. Las acciones que cambian la configuración (`PUT /v1/demo/prompts|secrets|vocabulary` y `POST /v1/demo/sources/*`) y las lecturas `GET /v1/demo/config`, `/v1/demo/events` y `/v1/inbox/{user}` no piden autenticación: cualquiera que llegue a la API puede cambiar prompts, secretos y permisos. El token de operador (`MOSAIC_OPERATOR_TOKEN`) solo protege el detalle de eventos, el grafo y la traza de revisiones.
 
 La configuración inicial del panel usa `mvp-policy.yaml`, `mvp-case.yaml` y `mvp-history.yaml`: no tiene secretos de un caso empresarial predefinido y contiene dos destinatarios ficticios, `usuario_demo` y `revisor_demo`. `mvp-history.yaml` precarga la ontología de los tres escenarios de «Simulación» (correo, código e informe), generada con Claude al analizar e incorporar cada ejemplo; así se puede evaluar la salida de un ejemplo sin analizar antes su fuente. Los destinatarios y roles se definen en YAML; el panel aún no crea ni autentica usuarios reales.
 
@@ -20,6 +20,17 @@ La configuración inicial del panel usa `mvp-policy.yaml`, `mvp-case.yaml` y `mv
 - **Elementos marcados:** permite filtrar los registros pendientes, revisados o descartados. Revisar o descartar una alerta solo actualiza el registro: no aprueba el borrador ni ejecuta una entrega.
 
 Los contadores provienen de los registros persistidos, por organización y operación. Las listas no contienen textos evaluados, citas ni logs privados. Para abrir la evidencia o registrar una revisión, inicia la API con `MOSAIC_OPERATOR_TOKEN` (en el entorno o en `.env`). Si abres el panel desde `127.0.0.1` o `localhost`, el token ya viene cargado en «Acceso de operador»; desde otro origen (por ejemplo, Render) se escribe una vez y queda guardado en ese navegador hasta pulsar «Olvidar token». Los detalles incluyen las salidas estructuradas del analista y del adversario, hipótesis, citas y cálculos de riesgo disponibles; no son el razonamiento interno del proveedor. Las evaluaciones repetidas con el mismo identificador no duplican la notificación de un mismo borrador.
+
+## Modo presentación
+
+Para proyectar la simulación en pantalla grande, abre `http://127.0.0.1:8001/?presentar` o pulsa «Modo presentación» en la cabecera. El modo normal no cambia.
+
+- Agranda toda la página (`zoom: 1.4`) y deja solo el flujo de la salida: escenario, destinatario, pregunta, respuesta del agente y los botones de evaluación.
+- Oculta la barra lateral, las métricas, el aviso de simulación, las ayudas, la fecha, los adjuntos, la evidencia técnica y la columna «Entrada de información».
+- El veredicto se muestra en grande y con color: verde si se aprueba o entrega, ámbar si necesita reformulación o revisión, rojo si se rechaza. La página baja sola hasta él.
+- «Salir de presentación», abajo a la derecha, vuelve al modo normal.
+
+Como la entrada queda oculta, incorpora las fuentes que necesite el guion en el modo normal antes de presentar: quedan guardadas en la base de la API.
 
 ## Agentes
 

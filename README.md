@@ -26,7 +26,9 @@ mosaic key
 python -m uvicorn isde.api:create_app --factory --host 127.0.0.1 --port 8001
 ```
 
-Abre http://127.0.0.1:8001/ para usar las pestañas de simulación, configuración, notificaciones y elementos marcados. Puedes editar prompts y secretos, analizar fuentes y evaluar respuestas de texto libre. El panel empieza sin secretos de ejemplo; el análisis adversarial busca posibles datos sensibles incluso antes de que configures categorías. Si prefieres, configura `ANTHROPIC_API_KEY` en el entorno en lugar de `mosaic key`. Los análisis con Claude consumen API. La configuración y los registros se guardan en la base de datos de la API. Detalles y límites en [docs/panel.md](docs/panel.md).
+Abre http://127.0.0.1:8001/ para usar las pestañas de simulación, configuración, notificaciones y elementos marcados. Puedes editar prompts y secretos, analizar fuentes y evaluar respuestas de texto libre. El panel empieza sin secretos de ejemplo; el análisis adversarial busca posibles datos sensibles incluso antes de que configures categorías. Si prefieres, configura `ANTHROPIC_API_KEY` en el entorno en lugar de `mosaic key`. Los análisis con Claude consumen API. La configuración y los registros se guardan en la base de datos de la API. Detalles y límites en [docs/panel.md](docs/panel.md). Para proyectarlo en pantalla grande, abre `http://127.0.0.1:8001/?presentar`.
+
+Para la intranet de AlphaCorp, inicia la API con el caso clásico: `MOSAIC_POLICY=examples/policy.yaml MOSAIC_CASE=examples/case.yaml MOSAIC_HISTORY=examples/history.yaml`. El perfil por defecto (`examples/mvp-*.yaml`) no tiene tareas, así que `POST /v1/messages` responde 400 «Tarea desconocida». `/v1/messages` solo entrega texto del catálogo del caso; para texto libre, como los correos humanos, usa `POST /v1/reviews` con `task: "email"` o `"freeform"`. Las acciones posibles son `allow`, `repair` y `review`; no existe `block`.
 
 La demo original, con respuestas de catálogo y sin Claude, sigue disponible:
 
