@@ -9,6 +9,7 @@ from langgraph.graph import END, START, StateGraph
 from .model import Hypothesis
 from .semantic import DraftAssessment, inspect_graph, score_candidate
 from .claude import model_id
+from .media import with_attachments
 from . import events
 
 
@@ -16,14 +17,16 @@ def encode(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
-def review(guard, model, review_id, user, task, day, text, question, *, revision=False, revision_id=None):
+def review(guard, model, review_id, user, task, day, text, question, *, revision=False, revision_id=None, attachments=()):
     if user not in {a.user for a in guard.case.assignments if (a.org, a.operation) == guard.scope}:
         raise ValueError("Destinatario fuera del directorio")
     if not revision and task != "freeform" and task not in guard.case.tasks:
         raise ValueError("Tarea desconocida")
     if not revision and task == "freeform" and not question.strip():
         raise ValueError("La tarea libre requiere una pregunta")
-    original_hash = hashlib.sha256(encode([user, task, day.isoformat(), text, question]).encode()).hexdigest()
+    # Attachment hashes join only when present so earlier review identities stay valid.
+    digests = [[a.digest() for a in attachments]] if attachments else []
+    original_hash = hashlib.sha256(encode([user, task, day.isoformat(), text, question, *digests]).encode()).hexdigest()
     with guard.transaction():
         previous = guard.db.execute(
             "SELECT user,task,day,original_hash,revision,status,question FROM semantic_reviews WHERE org=? AND op=? AND review_id=?",
@@ -50,6 +53,8 @@ def review(guard, model, review_id, user, task, day, text, question, *, revision
                                 if previous[5] == "revise" else None}
         expected = previous
 
+    # Transcribe only after the replay checks so a repeated request costs nothing.
+    text = with_attachments(text, attachments) if attachments else text
     state = inspect_graph(guard, model).invoke({"user": user, "task": task, "question": question, "day": day, "text": text})
     status = "approved" if state["result"]["action"] == "allow" else "revise"
     snapshot = encode({"observer": state["context"], "internal": state["internal"]})

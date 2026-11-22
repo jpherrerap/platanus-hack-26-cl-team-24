@@ -40,6 +40,7 @@ class NewReview(BaseModel):
     question: str = Field(min_length=1, max_length=4000)
     text: str = Field(min_length=1, max_length=4000)
     day: date
+    attachments: list[Attachment] = Field(default_factory=list, max_length=4)
 
 
 class Revision(BaseModel):
@@ -427,7 +428,7 @@ def create_app(*, db: str | None = None, rewrite=claude_rewrite, seed=True, mode
             guard = open_guard()
             try:
                 return reviews.review(guard, model, item.review_id, item.user, item.task,
-                                      item.day, item.text, item.question)
+                                      item.day, item.text, item.question, attachments=item.attachments)
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             except Exception as exc:

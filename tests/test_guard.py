@@ -722,6 +722,41 @@ class GenericSecretTests(unittest.TestCase):
             finally:
                 guard.close()
 
+    @unittest.skipUnless(all(importlib.util.find_spec(n) for n in ("fastapi", "langgraph", "httpx")),
+                         "Instala el extra api")
+    def test_dashboard_review_evaluates_the_transcribed_attachment(self):
+        import base64
+        from fastapi.testclient import TestClient
+        from isde.api import create_app
+        from isde.media import Transcript
+        from isde.semantic import DraftAssessment
+        texts = []
+        class Model:
+            def analyze(self, policy, text, question):
+                texts.append(text)
+                return DraftAssessment(facts=[], covers_all_claims=False, fulfills_task=True)
+            def adversarial(self, policy, text, view):
+                if "Roble 10" not in text:
+                    return []
+                return [Hypothesis(claim=("persona", "intrinsic_sensitivity", "domicilio"),
+                                   quote="vive en Roble 10", p_if_seen=.9)]
+        ocr = mock.Mock(return_value=Transcript(text="La persona vive en Roble 10."))
+        image = {"name":"foto.png", "media_type":"image/png", "data":base64.b64encode(b"\x89PNG").decode()}
+        body = {"review_id":"adjunto", "user":"usuario_demo", "task":"freeform", "question":"Saluda",
+                "day":DAY.isoformat(), "text":"Hola.", "attachments":[image]}
+        with tempfile.TemporaryDirectory() as folder, mock.patch.dict(os.environ, {}, clear=True), \
+             mock.patch("isde.media._request", ocr):
+            client = TestClient(create_app(db=str(Path(folder)/"db.sqlite"), model=Model()))
+            self.assertEqual(client.post("/v1/reviews", json=body).json()["status"], "revise")
+            self.assertEqual(client.post("/v1/reviews", json=body).json()["status"], "revise")
+            other = {**body, "attachments":[{**image, "data":base64.b64encode(b"otro").decode()}]}
+            self.assertEqual(client.post("/v1/reviews", json=other).status_code, 400)
+            self.assertEqual(ocr.call_count, 1)
+            self.assertEqual(texts, ["Hola.\n\n[Adjunto: foto.png]\nLa persona vive en Roble 10."])
+            self.assertEqual(client.post("/v1/reviews/adjunto/deliver", json={"user":"usuario_demo"}).status_code, 400)
+            self.assertEqual(client.get("/v1/inbox/usuario_demo").json()["messages"], [])
+            self.assertIn('id="attachments"', client.get("/").text)
+
     def test_intrinsic_risk_is_not_ignored_when_prior_category_is_known(self):
         from isde.model import INTRINSIC_FAMILY
         policy = self.base
