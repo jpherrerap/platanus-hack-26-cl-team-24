@@ -11,6 +11,8 @@ python -m isde demo > /dev/null   # ensayo: debe terminar sin errores
 
 Ten la terminal con letra grande y este archivo abierto al lado.
 
+Si presentas desde el panel, prepara las fuentes en el modo normal y luego abre `http://127.0.0.1:8001/?presentar` en pantalla completa (F11): muestra solo la respuesta del agente y el veredicto en grande. Detalles en [panel.md](panel.md#modo-presentación).
+
 ## 1. Problema (30 s)
 
 - Los guardrails actuales revisan cada respuesta por separado: «¿este texto contiene un secreto?».

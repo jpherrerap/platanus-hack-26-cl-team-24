@@ -21,6 +21,17 @@ La configuración inicial del panel usa `mvp-policy.yaml`, `mvp-case.yaml` y `mv
 
 Los contadores provienen de los registros persistidos, por organización y operación. Las listas no contienen textos evaluados, citas ni logs privados. Para abrir la evidencia o registrar una revisión, inicia la API con `MOSAIC_OPERATOR_TOKEN` (en el entorno o en `.env`). Si abres el panel desde `127.0.0.1` o `localhost`, el token ya viene cargado en «Acceso de operador»; desde otro origen (por ejemplo, Render) se escribe una vez y queda guardado en ese navegador hasta pulsar «Olvidar token». Los detalles incluyen las salidas estructuradas del analista y del adversario, hipótesis, citas y cálculos de riesgo disponibles; no son el razonamiento interno del proveedor. Las evaluaciones repetidas con el mismo identificador no duplican la notificación de un mismo borrador.
 
+## Modo presentación
+
+Para proyectar la simulación en pantalla grande, abre `http://127.0.0.1:8001/?presentar` o pulsa «Modo presentación» en la cabecera. El modo normal no cambia.
+
+- Agranda toda la página (`zoom: 1.4`) y deja solo el flujo de la salida: escenario, destinatario, pregunta, respuesta del agente y los botones de evaluación.
+- Oculta la barra lateral, las métricas, el aviso de simulación, las ayudas, la fecha, los adjuntos, la evidencia técnica y la columna «Entrada de información».
+- El veredicto se muestra en grande y con color: verde si se aprueba o entrega, ámbar si necesita reformulación o revisión, rojo si se rechaza. La página baja sola hasta él.
+- «Salir de presentación», abajo a la derecha, vuelve al modo normal.
+
+Como la entrada queda oculta, incorpora las fuentes que necesite el guion en el modo normal antes de presentar: quedan guardadas en la base de la API.
+
 ## Agentes
 
 En «Agentes y prompts» elige y edita la instrucción del constructor de ontología, analista adversarial, analista de respuestas o reformulador de catálogo. Puedes restaurar los textos iniciales. El modelo Claude se selecciona de forma global con `MOSAIC_CLAUDE_MODEL`; los prompts son independientes por agente. La política se entrega como contexto a los agentes de análisis. El reformulador de `/v1/messages` recibe una alternativa de catálogo que el motor ya encontró admisible. En la revisión de texto libre, un agente externo o el operador aporta la reformulación.
