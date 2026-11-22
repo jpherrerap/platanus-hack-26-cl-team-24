@@ -8,7 +8,7 @@ mosaic key
 python -m uvicorn isde.api:create_app --factory --host 127.0.0.1 --port 8001
 ```
 
-Abre http://127.0.0.1:8001/. En vez del llavero también puedes configurar `ANTHROPIC_API_KEY` en el entorno. Las llamadas para analizar fuentes o respuestas usan Claude y pueden tener costo. El panel es para una integración de confianza en un proceso local: no lo publiques en red sin autenticación y control de acceso.
+Abre http://127.0.0.1:8001/. En vez del llavero también puedes configurar `ANTHROPIC_API_KEY` en el entorno. Las llamadas para analizar fuentes o respuestas usan Claude y pueden tener costo. El panel es para una integración de confianza en un proceso local: no lo publiques en red sin autenticación y control de acceso. Las acciones que cambian la configuración (`PUT /v1/demo/prompts|secrets|vocabulary` y `POST /v1/demo/sources/*`) exigen la cabecera `X-Mosaic-Operator-Token` con el valor de `MOSAIC_OPERATOR_TOKEN`; sin esa variable responden 403. Las lecturas `GET /v1/demo/config`, `/v1/demo/events` y `/v1/inbox/{user}` siguen abiertas, igual que los endpoints de integración (`/v1/messages`, `/v1/reviews`, `/v1/observations`, `/v1/sources`).
 
 La configuración inicial del panel usa `mvp-policy.yaml`, `mvp-case.yaml` y `mvp-history.yaml`: no tiene secretos de un caso empresarial predefinido y contiene dos destinatarios ficticios, `usuario_demo` y `revisor_demo`. Los destinatarios y roles se definen en YAML; el panel aún no crea ni autentica usuarios reales.
 

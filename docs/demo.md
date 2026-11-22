@@ -63,7 +63,7 @@ Opcional, si hay tiempo o piden verlo gráfico: `python -m isde serve` y abrir h
 
 ## 4. Límites honestos (30 s)
 
-- Las respuestas salen de un catálogo de cláusulas ya vinculadas a hechos. mosAIc no analiza texto libre arbitrario. Con un borrador desconocido, busca la respuesta aprobada más corta que cumpla la tarea.
+- En `/v1/messages` las respuestas salen de un catálogo de cláusulas ya vinculadas a hechos; con un borrador desconocido, busca la respuesta aprobada más corta que cumpla la tarea. El texto libre va por `/v1/reviews`: Claude extrae hechos con cita literal y un adversario propone inferencias, pero decide ProbLog.
 - Los pesos de evidencia (0,15, 0,75, 0,98…) son supuestos editables y no están calibrados con usuarios reales.
 - No cubre colusión entre destinatarios ni cruces entre operaciones distintas.
 - Claude es opcional y solo propone evidencia. La demo no lo usa.
@@ -83,7 +83,7 @@ Una revelación directa sin autorización se retiene igual. Una deducción indir
 Claude responde con una herramienta forzada y esquema Pydantic. En `interpret` solo elige IDs de pistas que ya vinculó el adaptador, y la confianza queda topada por el grado de evidencia. En `propose`, cada triple exige una cita literal y vocabulario de la política, y el resultado se revisa antes de cargarlo. Rol, organización y origen nunca vienen del modelo. La salida de Claude es una propuesta no confiable: si un solo elemento falla la validación, se descarta toda la respuesta. `test_prompt_injection_in_source_cannot_choose_recipient_or_role` muestra una fuente que ordena emitir un rol para otro usuario y mosAIc lo rechaza.
 
 **¿Sirve con texto libre de un agente real?**
-Hoy no. Esa es la siguiente versión: mapear texto libre a hechos. El núcleo de decisión no cambia.
+Sí, por `/v1/reviews`: Claude mapea el texto a hechos con cita literal y una vista adversarial propone lo que el destinatario podría deducir. La decisión sigue siendo de ProbLog y de las reglas; la intranet de AlphaCorp la usa para sus correos (`task: "email"`).
 
 **¿Qué pasa con varios destinatarios que comparten información?**
 No está cubierto. Cada evaluación es por destinatario, organización y operación.

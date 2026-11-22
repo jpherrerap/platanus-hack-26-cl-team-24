@@ -272,7 +272,7 @@ def score_candidate(guard, state):
     if result["action"] != "allow":
         return result, None
     # A human email answers no task and may say things the vocabulary cannot hold; only the inference risk
-    # (adversary hypotheses + ProbLog) and unverified protected facts decide. Agent answers stay fail-closed.
+    # (adversary hypotheses + ProbLog) and any extracted fact without internal support decide. Agent answers stay fail-closed.
     if state.get("task") == EMAIL_TASK:
         return result, exposure
     if not analysis.covers_all_claims or not analysis.fulfills_task:

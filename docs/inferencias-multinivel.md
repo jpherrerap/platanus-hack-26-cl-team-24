@@ -21,7 +21,7 @@ Una familia puede usar `any_value: true` en lugar de `statuses`: así protege cu
 rules:
   - when: [["?x", a, "yes"]]
     then: ["?x", b, "yes"]
-  - when: [["?x", b, "yes"], ["?x", permiso, "yes"]]
+  - when: [["?x", b, "yes"]]
     then: ["?x", c, "yes"]
   - when: [["?x", c, "yes"]]
     then: ["?x", d, "yes"]
