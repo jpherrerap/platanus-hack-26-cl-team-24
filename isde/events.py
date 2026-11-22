@@ -2,9 +2,12 @@
 import hashlib
 import json
 from datetime import datetime, timezone
+from typing import Literal
+
+from pydantic import AwareDatetime, Field
 
 from .claude import model_id
-from .model import INTRINSIC_FAMILY
+from .model import INTRINSIC_FAMILY, Model
 
 
 def record(guard, kind, title, target_type, target_id, details, status="open"):
@@ -16,6 +19,36 @@ def record(guard, kind, title, target_type, target_id, details, status="open"):
     """, (*guard.scope, event_id, kind, title, datetime.now(timezone.utc).isoformat(),
           target_type, target_id, status, json.dumps(details, ensure_ascii=False)))
     return event_id
+
+
+class PastEvent(Model):
+    kind: Literal["blocked", "flagged", "allowed"]
+    title: str = Field(min_length=1, max_length=300)
+    target_type: Literal["source", "review", "message", "delivery"]
+    target_id: str = Field(min_length=1, max_length=200)
+    created_at: AwareDatetime
+    # Only settled notifications: a seeded alert must never look pending or authorize anything.
+    status: Literal["resolved", "dismissed", "delivered", "approved"]
+    resolution_note: str = Field(default="", max_length=1000)
+    details: dict = Field(default_factory=dict)
+
+
+class PastEvents(Model):
+    events: list[PastEvent] = Field(max_length=200)
+
+
+def seed(guard, items):
+    """Past, already reviewed notifications for a demo workspace; restarting never duplicates them."""
+    with guard.transaction():
+        for item in items:
+            key = json.dumps([*guard.scope, item.kind, item.target_type, item.target_id], separators=(",", ":"))
+            settled = item.created_at.isoformat() if item.status in {"resolved", "dismissed"} else None
+            guard.db.execute("""
+                INSERT INTO activity_events VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(org,op,event_id) DO NOTHING
+            """, (*guard.scope, hashlib.sha256(key.encode()).hexdigest()[:32], item.kind, item.title,
+                  item.created_at.isoformat(), item.target_type, item.target_id, item.status,
+                  json.dumps(item.details, ensure_ascii=False), settled, item.resolution_note or None))
 
 
 MESSAGE_TITLES = {"allow": "Se entregó una respuesta sin cambios",

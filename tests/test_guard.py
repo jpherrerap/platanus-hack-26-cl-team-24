@@ -736,6 +736,33 @@ class DynamicVocabularyTests(unittest.TestCase):
                 guard.close()
 
 
+class SeededEventsTests(unittest.TestCase):
+    @unittest.skipUnless(all(importlib.util.find_spec(n) for n in ("fastapi", "langgraph", "httpx")),
+                         "Instala el extra api")
+    def test_demo_notifications_load_settled_and_once(self):
+        from fastapi.testclient import TestClient
+        from isde.api import create_app
+        from isde.events import PastEvents
+        settings = {"MOSAIC_HISTORY": str(ROOT / "vacuna-history.yaml"), "MOSAIC_EVENTS": str(ROOT / "vacuna-events.yaml"),
+                    "MOSAIC_OPERATOR_TOKEN": "operator"}
+        with tempfile.TemporaryDirectory() as folder, mock.patch.dict(os.environ, settings, clear=True):
+            path = str(Path(folder) / "data.sqlite")
+            create_app(db=path)
+            client = TestClient(create_app(db=path))
+            feed = client.get("/v1/demo/events").json()
+            self.assertEqual((feed["counts"]["total"], feed["counts"]["open"], feed["counts"]["blocked"]), (7, 0, 3))
+            self.assertEqual(feed["events"][0]["title"], "Se entregó una respuesta sin cambios")  # Newest first.
+            event = client.get(f"/v1/demo/events/{feed['events'][1]['id']}",
+                               headers={"X-Mosaic-Operator-Token": "operator"}).json()
+            self.assertEqual(event["status"], "resolved")
+            self.assertTrue(event["resolution_note"])
+        # A seeded notification is always settled: it can never pose as a pending alert.
+        with self.assertRaises(Exception):
+            PastEvents.model_validate({"events": [{"kind": "blocked", "title": "x", "target_type": "review",
+                                                   "target_id": "r", "created_at": "2026-11-01T10:00:00Z",
+                                                   "status": "open"}]})
+
+
 class ConfidentialityTests(unittest.TestCase):
     def setUp(self):
         self.policy = Policy.load(ROOT / "mvp-policy.yaml")
