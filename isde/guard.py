@@ -309,6 +309,35 @@ class Guard:
         return names | {alias: names[node] for alias, node in self.db.execute(
             "SELECT alias,id FROM kg_aliases WHERE org=? AND op=?", self.scope) if node in nodes}
 
+    def secret_briefs(self, at):
+        """Each group of linked confidential data nodes, with its names and the internal sentences about it."""
+        names = self.confidential_nodes()
+        nodes = {node for node, _ in names.values()}
+        if not nodes:
+            return []
+        facts = [fact for _, fact, _ in self.records("", at)]
+        group = {node: node for node in nodes}
+
+        def root(node):
+            while group[node] != node:
+                node = group[node]
+            return node
+        for subject, _, value in facts:
+            if subject in nodes and value in nodes:
+                # The smallest id names the group, so the same graph always yields the same secret ids.
+                first, second = sorted((root(subject), root(value)))
+                group[second] = first
+        labels = self.labels()
+        briefs = {}
+        for node in sorted(nodes):
+            brief = briefs.setdefault(root(node), {"id": root(node), "nombres": [], "hechos": []})
+            brief["nombres"].append(labels.get(node, node))
+        for fact in facts:
+            touched = {root(term) for term in (fact[0], fact[2]) if term in nodes}
+            for key in touched:
+                briefs[key]["hechos"] += describe([fact], labels)
+        return [{**brief, "hechos": sorted(set(brief["hechos"]))} for brief in briefs.values()]
+
     def path_ratings(self):
         return dict(self.db.execute("SELECT signature,confidence FROM path_ratings WHERE org=? AND op=?", self.scope))
 
@@ -445,7 +474,7 @@ class Guard:
         return " ".join(self.case.clauses[key].text for key in option.clauses)
 
     def _decide(self, user, task_id, at, draft, assessments, assessor, *, strict=False,
-                verify_all_facts=True):
+                verify_all_facts=True, disclosed=()):
         if task_id not in self.case.tasks:
             raise ValueError(f"Tarea desconocida: {task_id}")
         task = self.case.tasks[task_id]
@@ -493,6 +522,10 @@ class Guard:
             named |= {node for node, label in confidential.values() if mentions(label, text)}
             if named:
                 attempts.append({"reason": "confidential_node", "nodes": sorted(named)})
+                continue
+            # The secret judge read this exact text; its finding holds the draft like a named secret.
+            if disclosed:
+                attempts.append({"reason": "confidential_inference", "nodes": sorted(disclosed)})
                 continue
             privacy_reason = rut_protection.reason(text, facts)
             if privacy_reason:

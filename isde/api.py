@@ -114,6 +114,9 @@ def create_app(*, db: str | None = None, rewrite=claude_rewrite, seed=True, mode
         guard = Guard(db, policy, case, prompts=prompts)
         try:
             guard.observe(history.observations)
+            # Optional demo notifications; without the variable the feed starts empty, as before.
+            if os.environ.get("MOSAIC_EVENTS"):
+                activity_events.seed(guard, activity_events.PastEvents.load(os.environ["MOSAIC_EVENTS"]).events)
         finally:
             guard.close()
     app = FastAPI(title="mosAIc demo", version="0.1.0")

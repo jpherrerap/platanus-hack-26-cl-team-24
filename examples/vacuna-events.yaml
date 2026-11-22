@@ -1,0 +1,109 @@
+# Notificaciones pasadas y ya revisadas del caso ficticio de la vacuna VX-Aurora.
+# Úsalo con MOSAIC_EVENTS junto a MOSAIC_HISTORY=examples/vacuna-history.yaml y una base nueva.
+events:
+  - kind: flagged
+    title: Se detectó información potencialmente sensible en una fuente
+    target_type: source
+    target_id: informe_ensayos_vx_aurora
+    created_at: "2026-11-03T09:12:00-03:00"
+    status: resolved
+    resolution_note: Fuente revisada. El informe de ensayos queda como dato restringido.
+    details:
+      origin: source_analysis
+      source_id: informe_ensayos_vx_aurora
+      source_text: "Informe confidencial ficticio de Biovacunas del Sur: la vacuna VX-Aurora contra el virus respiratorio sincicial está en ensayos clínicos de fase III en curso, con 4.800 voluntarios en Chile y Perú."
+      notice: Analizar una entrada no implica que se haya bloqueado una salida.
+  - kind: blocked
+    title: Se bloqueó una posible filtración de información
+    target_type: review
+    target_id: "review_prensa_0311:0"
+    created_at: "2026-11-05T16:40:00-03:00"
+    status: resolved
+    resolution_note: Retención correcta. El borrador nombraba el proyecto; se avisó al equipo de comunicaciones.
+    details:
+      origin: review_api
+      recipient: usuario_demo
+      question: Responde a un periodista que pregunta por novedades.
+      candidate: VX-Aurora ya está en fase III con voluntarios en Chile.
+      decision:
+        action: review
+        attempts:
+          - reason: confidential_node
+            nodes: [vx_aurora]
+      notice: Registro de salidas estructuradas y decisión; no contiene razonamiento interno del proveedor.
+  - kind: allowed
+    title: Se aprobó una respuesta sin riesgo detectado
+    target_type: review
+    target_id: "review_congreso_0811:0"
+    created_at: "2026-11-08T11:05:00-03:00"
+    status: approved
+    details:
+      origin: review_api
+      recipient: usuario_demo
+      question: Confirma la participación en el congreso.
+      candidate: Biovacunas del Sur participará en el congreso regional de inmunología.
+      decision:
+        action: allow
+        attempts: []
+  - kind: blocked
+    title: Se bloqueó una posible filtración de información
+    target_type: review
+    target_id: "review_inversionistas_1211:0"
+    created_at: "2026-11-12T10:22:00-03:00"
+    status: resolved
+    resolution_note: Retención correcta. Revelaba los ensayos sin nombrar VX-Aurora.
+    details:
+      origin: review_api
+      recipient: revisor_demo
+      question: Redacta una actualización breve para inversionistas.
+      candidate: Nuestra vacuna contra el VRS ya va en la última etapa de pruebas con humanos.
+      decision:
+        action: review
+        attempts:
+          - reason: confidential_inference
+            nodes: [ensayos_vx_aurora]
+      notice: Registro de salidas estructuradas y decisión; no contiene razonamiento interno del proveedor.
+  - kind: flagged
+    title: Una respuesta contiene señales para revisar
+    target_type: review
+    target_id: "review_presupuesto_1511:0"
+    created_at: "2026-11-15T15:48:00-03:00"
+    status: dismissed
+    resolution_note: Falso positivo. El aumento del presupuesto de investigación ya es público.
+    details:
+      origin: review_api
+      recipient: usuario_demo
+      question: Resume el cierre del trimestre.
+      candidate: Este trimestre aumentamos el presupuesto de investigación.
+      decision:
+        action: review
+        attempts: []
+  - kind: blocked
+    title: Se bloqueó una posible filtración de información
+    target_type: review
+    target_id: "review_eficacia_1811:0"
+    created_at: "2026-11-18T12:30:00-03:00"
+    status: resolved
+    resolution_note: Retención correcta. La eficacia preliminar es un dato confidencial.
+    details:
+      origin: review_api
+      recipient: usuario_demo
+      question: Responde a una consulta de un médico externo.
+      candidate: Los resultados preliminares muestran 91% de eficacia.
+      decision:
+        action: review
+        attempts:
+          - reason: confidential_node
+            nodes: [eficacia_91_porciento]
+      notice: Registro de salidas estructuradas y decisión; no contiene razonamiento interno del proveedor.
+  - kind: allowed
+    title: Se entregó una respuesta sin cambios
+    target_type: message
+    target_id: "msg_agenda_2011:usuario_demo"
+    created_at: "2026-11-20T09:15:00-03:00"
+    status: delivered
+    details:
+      origin: message_api
+      recipient: usuario_demo
+      candidate: La reunión de directorio será el jueves a las 10:00.
+      delivered_text: La reunión de directorio será el jueves a las 10:00.
