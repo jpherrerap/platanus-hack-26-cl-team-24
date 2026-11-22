@@ -7,13 +7,14 @@ mosAIc detecta y notifica mensajes potencialmente reveladores. Evalúa texto esc
 ## Cómo funciona
 
 1. El operador incorpora fuentes internas y configura qué información está protegida y quién puede recibirla.
-2. Cuando se evalúa un mensaje, mosAIc extrae hechos con Claude y estima qué inferencias podría hacer ese destinatario. ProbLog calcula cuánto cambia el riesgo al sumar el mensaje a su historial.
+2. Cuando se evalúa un mensaje, mosAIc extrae hechos utilizando un modelo de lenguaje y estima qué inferencias podría hacer ese destinatario. ProbLog calcula cuánto cambia el riesgo al sumar el mensaje a su historial.
 3. Si la evaluación detecta un riesgo de divulgación, mosAIc registra una alerta en **Notificaciones**. Un operador puede abrir la evidencia y marcar la alerta como revisada o descartada.
 
 Por ejemplo, «El banco está en Avenida de Ejemplo 123» puede ser información pública. Si el destinatario ya recibió ese mensaje, «Una persona vive al lado del banco» puede revelar la ubicación aproximada de su domicilio. La alerta corresponde al mensaje que completa la inferencia.
 
 ## Probarlo
 
+Se puede probar mosAIc utilizando Claude como modelo.
 Para usar el panel con Claude en Python 3.11 o posterior:
 
 ```bash
