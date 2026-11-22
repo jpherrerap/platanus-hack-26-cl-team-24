@@ -1,4 +1,5 @@
 """Trusted policy and input contracts. Identifiers never contain executable rules."""
+import re
 import unicodedata
 from datetime import date
 from pathlib import Path
@@ -12,21 +13,58 @@ Probability = Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
 Triple = tuple[Id, Id, Id]
 
 
+def fold_id(value):
+    """Claude writes identifiers with accents, capitals or leading digits; fold them to the canonical form.
+
+    A name keeps its other characters and fails validation (O-18 is not o_18). A number's punctuation becomes
+    underscores, so 1.500 and 1,500 are the same value, and ½ stays apart from 12."""
+    if not isinstance(value, str):
+        return value
+    folded = unicodedata.normalize("NFKD", value).replace("\u2044", "/").encode("ascii", "ignore").decode().lower()
+    number = folded.lstrip("$ ")
+    if number[:1].isdigit():
+        # Amounts, percentages and dates are values; their punctuation carries no identity, unlike O-18.
+        number = re.sub(r"[^a-z0-9]+", "_", number.replace("%", "_pct")).strip("_")
+        return "v_" + number if re.fullmatch(r"[a-z0-9_]+", number) else folded
+    return folded
+
+
 def fold_ids(value):
-    """Claude writes Spanish identifiers with accents or capitals; fold them to the canonical ASCII form."""
     if not isinstance(value, (list, tuple)):
         return value
-    return [unicodedata.normalize("NFKD", v).encode("ascii", "ignore").decode().lower() if isinstance(v, str) else v
-            for v in value]
+    return [fold_id(v) for v in value]
 
 
 # Only for triples proposed by the model; quotes stay literal and trusted inputs keep strict identifiers.
 ModelTriple = Annotated[Triple, BeforeValidator(fold_ids)]
+ModelId = Annotated[Id, BeforeValidator(fold_id)]
 RuleTerm = Annotated[str, Field(pattern=r"^(?:[a-z][a-z0-9_]{0,95}|\?[a-z][a-z0-9_]{0,95})$")]
 RuleAtom = tuple[RuleTerm, Id, RuleTerm]
 Grade = Literal["possible_access", "external_hint", "delivered", "read", "cited"]
 NodeType = Literal["persona", "organizacion", "documento", "evento", "rol", "fuente", "dato", "valor", "entidad"]
 INTRINSIC_FAMILY = "intrinsic_sensitivity"
+Confidentiality = Literal["publico", "interno", "confidencial", "restringido"]
+LEVELS = ["publico", "interno", "confidencial", "restringido"]
+CONFIDENTIAL = {"confidencial", "restringido"}
+DATA_NODES = {"dato", "valor"}
+ACTOR_NODES = {"persona", "organizacion", "rol", "fuente"}
+BOOLEAN_FLAGS = {"verdadero", "verdadera", "falso", "falsa", "true", "false", "si", "no", "yes"}
+# Words that state confidentiality; as a triple object they label the subject, they are not a node.
+LEVEL_WORDS = {"publico": "publico", "publica": "publico", "interno": "interno", "interna": "interno",
+               "privado": "confidencial", "privada": "confidencial", "reservado": "confidencial",
+               "reservada": "confidencial", "confidencial": "confidencial", "sensible": "confidencial",
+               "restringido": "restringido", "restringida": "restringido", "secreto": "restringido",
+               "secreta": "restringido"}
+SHARE_WORDS = {"compartir", "compartirse", "compartible", "compartido", "publicar", "publicarse", "publicable",
+               "publicado", "divulgar", "divulgarse", "divulgable", "comunicar", "comunicarse", "comunicado", "revelar",
+               "revelarse", "revelado", "difundir", "difundirse", "difundido", "divulgado", "enviar", "anunciar",
+               "anunciarse", "anunciado", "publicamente"}
+LEVEL_FILLER = {"informacion", "dato", "datos", "credencial", "uso", "solo", "de", "caracter", "muy", "altamente",
+                "estrictamente", "es", "y"}
+# Predicates about confidentiality itself; only there do "publico" or "interno" label the subject.
+LEVEL_PREDICATES = {"confidencialidad", "confidencial", "clasificacion", "nivel", "privacidad", "restriccion",
+                    "restriction", "sensibilidad", "visibilidad", "caracter", "publicidad", "divulgacion", "publicacion",
+                    "es"}
 
 
 class Model(BaseModel):
@@ -273,6 +311,36 @@ class Entity(Model):
     type: NodeType = "entidad"
     label: str = Field(min_length=1, max_length=200)
     aliases: list[Id] = Field(default_factory=list, max_length=16)
+    confidentiality: Confidentiality | None = None
+
+
+def stricter(*levels):
+    """Confidentiality only rises: the strictest stated level wins, and None means not stated."""
+    return max((level for level in levels if level), key=LEVELS.index, default=None)
+
+
+def flag_level(predicate, value):
+    """Level carried by a triple whose object is a flag, not an entity; None for an ordinary triple.
+
+    Returns "" for a flag that states no level (a bare boolean): it must still not become a node."""
+    words, terms = value.split("_"), predicate.split("_")
+    if value.startswith("no_"):
+        # A negated disclosure ("no_publicar") restricts; another negated state ("no_firmado") is a real value.
+        return "confidencial" if SHARE_WORDS & set(words) else None
+    if value in BOOLEAN_FLAGS:
+        negative = value in {"falso", "falsa", "false", "no"}
+        if SHARE_WORDS & set(terms):
+            # puede_publicarse falso and no_debe_publicarse verdadero both restrict.
+            return "confidencial" if negative != ("no" in terms) else "publico"
+        level = stricter(*(LEVEL_WORDS.get(w) for w in terms))
+        # es_publico falso says only that the datum is not public.
+        return ("interno" if level == "publico" else "") if negative else level or ""
+    # token_interno names a node; only a value made of level and filler words is a label.
+    if not set(words) & LEVEL_WORDS.keys() or set(words) - LEVEL_WORDS.keys() - LEVEL_FILLER:
+        return None
+    level = stricter(*(LEVEL_WORDS.get(w) for w in words))
+    # sector publico is a fact; a weak level labels the subject only under a confidentiality predicate.
+    return level if level in CONFIDENTIAL or LEVEL_PREDICATES & set(terms) else None
 
 
 class ProtectedLiteral(Model):

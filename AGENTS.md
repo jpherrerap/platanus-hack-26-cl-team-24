@@ -8,6 +8,7 @@ Guardrail que revisa la respuesta de un agente antes de entregarla. Estima con P
 python3 -m venv .venv && source .venv/bin/activate
 python -m pip install -e '.[api]'          # incluye claude; sin fastapi se saltan los tests de la API
 python -m unittest discover -s tests -v   # sin credenciales; Claude se simula
+MOSAIC_LIVE_CLAUDE=1 python -m unittest tests.test_ontology_live   # opcional, llama a Claude
 isde demo                                 # caso ficticio en memoria
 ```
 
@@ -27,6 +28,7 @@ isde demo                                 # caso ficticio en memoria
 
 - Nada llega a la bandeja sin pasar por `Guard._decide`. Si ninguna alternativa es admisible, la decisión es `review`.
 - Los valores protegidos se registran desde fuentes internas con una cita literal. `Guard._decide` bloquea su divulgación exacta sin autorización, independientemente del riesgo inferido. Solo las declaraciones explícitas de confianza pueden asignar una familia con permisos de entrega.
+- Los nodos de datos llevan `confidentiality` (`publico`, `interno`, `confidencial`, `restringido`) en vez de triples cuyo objeto es una bandera (`verdadero`, `no_publicar`). Los niveles solo suben (`Guard._register`). `Guard._decide` bloquea un dato confidencial que el borrador nombra por id, alias o etiqueta (`confidential_node`), para cualquier destinatario. El detalle está en `docs/panel.md`.
 - En `/v1/reviews` se evalúa el riesgo de divulgación con las hipótesis del adversario, ProbLog y la verificación de hechos protegidos. La extracción de hechos alimenta el grafo. El catálogo de alternativas de `/v1/messages` mantiene sus comprobaciones.
 - La salida de Claude es una propuesta. Cada triple exige una cita literal de la fuente y predicados y estados del vocabulario de la política.
 - El contexto de un observador nunca incluye el grafo interno, las asignaciones ni otros destinatarios (`Guard.model_context`).

@@ -362,10 +362,16 @@ class DynamicVocabularyTests(unittest.TestCase):
         self.assertEqual(observations[0].protected_literals[0].quote, source.text)
 
         from isde.claude import InternalSuggestions
+        # An invented quote around a literal value is discarded, never stored: the value itself is the evidence.
         invented = InternalSuggestions(items=[], protected_literals=[
-            {"value":value, "quote":f"Una fuente inexistente contiene {value}"},
+            {"value":value, "quote":f"Una fuente inexistente contiene {value}", "family":"offer_status"},
         ])
-        with mock.patch("isde.claude._request", return_value=invented) as request:
+        with mock.patch("isde.claude._request", return_value=invented):
+            literal = propose(self.policy, source)[0].protected_literals[0]
+        self.assertEqual((literal.value, literal.quote, literal.family), (value, value, "intrinsic_sensitivity"))
+        # A value the source never contains has no evidence at all.
+        absent = InternalSuggestions(items=[], protected_literals=[{"value":"otro-valor", "quote":"otro-valor"}])
+        with mock.patch("isde.claude._request", return_value=absent) as request:
             with self.assertRaisesRegex(ValueError, "La propuesta protegida requiere una cita literal"):
                 propose(self.policy, source)
         self.assertEqual(request.call_count, 2)
@@ -399,8 +405,10 @@ class DynamicVocabularyTests(unittest.TestCase):
             calls.append(context)
             if len(calls) % 2 == 0:
                 self.assertEqual(context["unrepresented_claims"][0]["reason"], reason)
+            # The gap touches a confidential datum, so the partial extraction is still rejected whole.
             return schema(items=[{"fact":self.fact,"quote":self.source_text,"confidence":.9}],
                           vocabulary=[self.concept], covers_all_claims=False,
+                          entities=[{"id":"roble_10", "type":"dato", "label":"Roble 10", "confidentiality":"confidencial"}],
                           unrepresented_claims=[{"quote":"Roble 10", "reason":reason}])
         with tempfile.TemporaryDirectory() as folder, \
              mock.patch.dict(os.environ, {"MOSAIC_OPERATOR_TOKEN":"operator"}, clear=True), \
@@ -427,6 +435,38 @@ class DynamicVocabularyTests(unittest.TestCase):
                 self.assertEqual(guard.proposed_vocabulary(DAY), [])
                 self.assertEqual(guard.db.execute("SELECT count(*) FROM source_imports").fetchone()[0], 0)
                 self.assertEqual(guard.model_context(None, DAY)["facts"], [])
+            finally:
+                guard.close()
+
+    @unittest.skipUnless(all(importlib.util.find_spec(n) for n in ("fastapi", "langgraph", "httpx")),
+                         "Instala el extra api")
+    def test_partial_extraction_away_from_secrets_is_imported_and_flagged(self):
+        from fastapi.testclient import TestClient
+        from isde.api import create_app
+        text = "Hola, mi direccion es Roble 10. La mudanza aún no tiene fecha."
+        reason = "Una decisión pendiente no cabe en un triple"
+        def fake(role, context, schema, client, model):
+            return schema(items=[{"fact":self.fact, "quote":"mi direccion es Roble 10", "confidence":.9}],
+                          vocabulary=[self.concept], covers_all_claims=False,
+                          unrepresented_claims=[{"quote":"La mudanza aún no tiene fecha.", "reason":reason}])
+        with tempfile.TemporaryDirectory() as folder, \
+             mock.patch.dict(os.environ, {"MOSAIC_OPERATOR_TOKEN":"operator"}, clear=True), \
+             mock.patch("isde.claude._request", side_effect=fake):
+            path = str(Path(folder) / "data.sqlite")
+            client = TestClient(create_app(db=path, seed=False))
+            preview = client.post("/v1/demo/sources/preview",
+                                  json={"origin":"parcial", "at":DAY.isoformat(), "text":text}).json()
+            self.assertTrue(preview["preview_id"])
+            self.assertTrue(client.post(f"/v1/demo/sources/{preview['preview_id']}/accept").json()["accepted"])
+            feed = client.get("/v1/demo/events").json()
+            self.assertEqual((feed["counts"]["flagged"], feed["counts"]["blocked"]), (1, 0))
+            self.assertNotIn(reason, str(feed))
+            event = client.get(f"/v1/demo/events/{feed['events'][0]['id']}",
+                               headers={"X-Mosaic-Operator-Token":"operator"}).json()
+            self.assertEqual(event["details"]["unrepresented_claims"][0]["reason"], reason)
+            guard = Guard(path, self.policy, self.case)
+            try:
+                self.assertIn(self.fact, guard.model_context(None, DAY)["facts"])
             finally:
                 guard.close()
 
@@ -665,11 +705,266 @@ class DynamicVocabularyTests(unittest.TestCase):
             path = str(Path(folder)/"data.sqlite")
             create_app(db=path)
             vocabulary = TestClient(create_app(db=path)).get("/v1/demo/config").json()["vocabulary"]
-            self.assertTrue({"domicilio", "es_credencial_privada", "puede_compartirse"} <= vocabulary.keys())
+            self.assertIn("domicilio", vocabulary)
             guard = Guard(path, self.policy, self.case)
             try:
+                from isde.model import flag_level
+                from isde.semantic import DraftFacts, score_candidate
+                facts = [fact for _, fact, _ in guard.records("", DAY.replace(year=2100))]
+                self.assertEqual({o for o, _, _ in guard.records("", DAY.replace(year=2100))},
+                                 {"src:simulacion_" + n for n in ("correo", "codigo", "informe", "farmaco", "vacuna")})
+                self.assertEqual([f for f in facts if flag_level(f[1], f[2]) is not None], [])
                 literals = {row[0] for row in guard.db.execute("SELECT value FROM protected_literals")}
-                self.assertEqual(literals, {"Avenida de Ejemplo 123", "DEMO_TOKEN_NO_VALIDO_123", "diagnóstico médico"})
+                self.assertIn("DEMO_TOKEN_NO_VALIDO_123", literals)
+                self.assertTrue({"obo", "vx_aurora"} <= set(guard.confidential_nodes()))
+                day = date(2026, 12, 1)
+                def reason(text):
+                    state = {"user":"usuario_demo", "day":day, "text":text, "analysis":DraftFacts(facts=[]), "hypotheses":[]}
+                    return score_candidate(guard, state)[0]["attempts"][-1].get("reason")
+                self.assertEqual(reason("Obo es un fármaco."), "confidential_node")
+                self.assertEqual(reason("Obo se está trabajando."), "confidential_node")
+                self.assertEqual(reason("La dirección de Alba es Avenida de Ejemplo 123."), "confidential_node")
+                self.assertEqual(reason("El estudio ya tiene 4.800 voluntarios."), "confidential_node")
+                # Generic internal values never block by themselves; the adversarial analyst judges paraphrases.
+                for benign in ("No tenemos anuncios de productos por ahora.", "La revisión del equipo terminó el viernes.",
+                               "Biovacunas del Sur vende vacunas en Chile.",
+                               "La campaña de vacuna contra la influenza sigue en curso.",
+                               "Publicaremos el informe anual 2024 el próximo trimestre.",
+                               "Un ensayo clínico en fase III siempre es largo."):
+                    self.assertNotEqual(reason(benign), "confidential_node", benign)
+            finally:
+                guard.close()
+
+
+class ConfidentialityTests(unittest.TestCase):
+    def setUp(self):
+        self.policy = Policy.load(ROOT / "mvp-policy.yaml")
+        self.case = Case.load(ROOT / "mvp-case.yaml")
+        self.guard = Guard(":memory:", self.policy, self.case)
+        self.addCleanup(self.guard.close)
+        self.text = "En un proyecto ficticio, la variable TOKEN_X contiene hunter2. Es privada; no debe publicarse."
+        self.source = Source(origin="codigo", at=DAY, text=self.text)
+        self.concept = {"predicate":"contiene_valor", "description":"Variable que contiene un valor",
+                        "quote":"contiene hunter2", "confidence":.9}
+        self.link = {"fact":["token_x", "contiene_valor", "hunter2"], "quote":"contiene hunter2", "confidence":.9}
+
+    def client(self, *payloads):
+        calls = []
+        def create(**request):
+            calls.append(request)
+            payload = payloads[min(len(calls), len(payloads)) - 1]
+            return SimpleNamespace(content=[SimpleNamespace(type="tool_use", name="select_evidence", input=payload)],
+                                   stop_reason="tool_use")
+        return SimpleNamespace(messages=SimpleNamespace(create=create)), calls
+
+    def test_flag_objects_are_levels_not_nodes(self):
+        from isde.model import flag_level
+        cases = {("es_credencial_privada", "verdadero"): "confidencial", ("restriccion", "no_publicar"): "confidencial",
+                 ("tipo", "credencial_privada"): "confidencial", ("nivel", "secreto"): "restringido",
+                 ("puede_publicarse", "falso"): "confidencial", ("puede_compartirse", "verdadero"): "publico",
+                 ("no_debe_publicarse", "verdadero"): "confidencial", ("es_publico", "falso"): "interno",
+                 ("clasificacion", "publico"): "publico", ("respondio", "si"): "",
+                 # Real values stay triples: a node id, a negated state, a category that is not a level.
+                 ("nombre", "token_interno"): None, ("estado", "no_firmado"): None, ("sector", "publico"): None,
+                 ("tipo", "documento_publico"): None, ("domicilio", "avenida_de_ejemplo_123"): None}
+        for (predicate, value), level in cases.items():
+            with self.subTest(predicate=predicate, value=value):
+                self.assertEqual(flag_level(predicate, value), level)
+
+    def test_flag_triples_get_one_correction_then_become_the_subject_level(self):
+        flagged = {"vocabulary":[self.concept, {"predicate":"es_privada", "description":"Marca de privacidad",
+                                                "quote":"Es privada", "confidence":.9}],
+                   "items":[self.link, {"fact":["hunter2", "es_privada", "verdadero"], "quote":"Es privada", "confidence":.9},
+                            {"fact":["hunter2", "restriccion", "no_publicar"], "quote":"no debe publicarse",
+                             "confidence":.9}],
+                   "entities":[{"id":"hunter2", "type":"dato", "label":"hunter2"}]}
+        client, calls = self.client(flagged, flagged)
+        events = propose(self.policy, self.source, client=client)
+        self.assertEqual(len(calls), 2)
+        self.assertIn("es_privada verdadero", calls[1]["system"])
+        self.assertIn("Datos sin confidentiality: hunter2", calls[1]["system"])
+        self.assertEqual([f for e in events for f in e.facts], [("token_x", "contiene_valor", "hunter2")])
+        self.assertEqual([(e.id, e.confidentiality) for ev in events for e in ev.entities], [("hunter2", "confidencial")])
+        # A concept only the flags used adds nothing to the graph.
+        self.assertEqual([v.predicate for e in events for v in e.vocabulary], ["contiene_valor"])
+
+    def test_flag_on_an_undeclared_subject_still_protects_it(self):
+        payload = {"vocabulary":[self.concept], "items":[self.link,
+                   {"fact":["hunter2", "nivel", "secreto"], "quote":"Es privada", "confidence":.9}]}
+        client, _ = self.client(payload)
+        events = propose(self.policy, self.source, client=client)
+        self.guard.observe(events)
+        self.assertEqual(self.guard.confidential_nodes()["hunter2"][0], "hunter2")
+
+    def test_boolean_without_level_is_reported_not_silently_dropped(self):
+        text = "Pedro respondió que sí a la encuesta."
+        payload = {"vocabulary":[{"predicate":"respondio", "description":"Respuesta", "quote":"respondió",
+                                  "confidence":.9}],
+                   "items":[{"fact":["pedro", "respondio", "si"], "quote":"Pedro respondió que sí", "confidence":.9}],
+                   "entities":[{"id":"pedro", "type":"persona", "label":"Pedro"}]}
+        client, _ = self.client(payload)
+        events = propose(self.policy, Source(origin="encuesta", at=DAY, text=text), client=client)
+        self.assertEqual([f for e in events for f in e.facts], [])
+        self.assertEqual(events.unrepresented[0]["quote"], "Pedro respondió que sí")
+
+    def test_rule_over_a_boolean_state_keeps_it_as_a_fact(self):
+        text = "P tiene a. Todo a implica b."
+        payload = {"vocabulary":[{"predicate":n, "description":"Propiedad " + n, "quote":n, "confidence":.9}
+                                 for n in ("a", "b")],
+                   "items":[{"fact":["p", "a", "yes"], "quote":"P tiene a.", "confidence":.9}],
+                   "rules":[{"rule":{"when":[["?x", "a", "yes"]], "then":["?x", "b", "yes"]},
+                             "quote":"Todo a implica b.", "confidence":.9}]}
+        client, calls = self.client(payload)
+        events = propose(self.policy, Source(origin="reglas", at=DAY, text=text), client=client)
+        self.assertEqual(len(calls), 1)
+        self.assertIn(("p", "a", "yes"), [f for e in events for f in e.facts])
+
+    def test_concept_with_paraphrased_quote_borrows_its_fact_quote(self):
+        paraphrased = {**self.concept, "quote":"la variable contiene el valor"}
+        payload = {"vocabulary":[paraphrased], "items":[self.link],
+                   "entities":[{"id":"hunter2", "type":"dato", "label":"hunter2", "confidentiality":"restringido"}]}
+        client, calls = self.client(payload)
+        events = propose(self.policy, self.source, client=client)
+        self.assertEqual(len(calls), 2)  # The paraphrase still gets its one correction first.
+        self.assertEqual([v.quote for e in events for v in e.vocabulary], ["contiene hunter2"])
+
+    def test_variable_holding_a_protected_value_is_not_the_secret(self):
+        payload = {"vocabulary":[self.concept], "items":[self.link],
+                   "protected_literals":[{"value":"hunter2", "quote":"contiene hunter2"}],
+                   "entities":[{"id":"token_x", "type":"dato", "label":"TOKEN_X", "confidentiality":"restringido"},
+                               {"id":"hunter2", "type":"dato", "label":"hunter2", "confidentiality":"restringido"}]}
+        client, _ = self.client(payload)
+        events = propose(self.policy, self.source, client=client)
+        levels = {e.id: e.confidentiality for ev in events for e in ev.entities}
+        self.assertEqual(levels, {"token_x": "interno", "hunter2": "restringido"})
+        self.guard.observe(events)
+        self.assertEqual(set(self.guard.confidential_nodes()), {"hunter2"})
+
+    def test_a_secret_that_holds_a_protected_value_keeps_its_level(self):
+        text = "El proyecto secreto Obo tiene presupuesto 5M_USD. Obo es secreto."
+        payload = {"vocabulary":[{"predicate":"presupuesto", "description":"Monto asignado", "quote":"presupuesto 5M_USD",
+                                  "confidence":.9}],
+                   "items":[{"fact":["obo", "presupuesto", "v_5m_usd"], "quote":"presupuesto 5M_USD", "confidence":.9},
+                            {"fact":["obo", "nivel", "secreto"], "quote":"Obo es secreto", "confidence":.9}],
+                   "protected_literals":[{"value":"5M_USD", "quote":"presupuesto 5M_USD"}],
+                   "entities":[{"id":"obo", "type":"dato", "label":"Obo", "confidentiality":"restringido"},
+                               {"id":"v_5m_usd", "type":"valor", "label":"5M_USD", "confidentiality":"restringido"}]}
+        client, _ = self.client(payload)
+        events = propose(self.policy, Source(origin="obo", at=DAY, text=text), client=client)
+        self.assertEqual({e.id: e.confidentiality for ev in events for e in ev.entities},
+                         {"obo": "restringido", "v_5m_usd": "restringido"})
+
+    def test_short_protected_values_and_partial_words_never_spread(self):
+        text = "La reunión de directorio es pública; la clave es de."
+        payload = {"items":[], "protected_literals":[{"value":"de", "quote":"la clave es de"}],
+                   "entities":[{"id":"reunion", "type":"evento", "label":"reunión de directorio",
+                                "confidentiality":"publico"}]}
+        client, _ = self.client(payload)
+        events = propose(self.policy, Source(origin="corto", at=DAY, text=text), client=client)
+        self.assertEqual([l for e in events for l in e.protected_literals], [])
+        self.guard.observe(events)
+        # An operator-declared secret elsewhere only raises a node whose label names it as whole words.
+        self.guard.observe([Observation(origin="op", at=DAY, quote="Estado 12", protected_literals=[
+            {"value":"Estado 12", "quote":"Estado 12"}])])
+        self.guard.observe([Observation(origin="w", at=DAY, entities=[
+            Entity(id="banco", type="dato", label="Banco Estado 123", confidentiality="interno")])])
+        levels = dict(self.guard.db.execute("SELECT id,confidentiality FROM kg_nodes"))
+        self.assertEqual((levels["reunion"], levels["banco"]), ("publico", "interno"))
+
+    def test_merged_calls_count_any_claim_and_parse_json_text(self):
+        from isde.claude import merge_calls
+        merged = merge_calls([{"items":[], "has_factual_claims":True, "covers_all_claims":True},
+                              {"items":[], "has_factual_claims":False, "covers_all_claims":True,
+                               "protected_literals":json.dumps([{"value":"hunter2", "quote":"hunter2"}])}])
+        self.assertEqual((merged["has_factual_claims"], merged["covers_all_claims"]), (True, True))
+        self.assertEqual(merged["protected_literals"], [{"value":"hunter2", "quote":"hunter2"}])
+        with self.assertRaisesRegex(ValueError, "formato inválido"):
+            merge_calls([{"items":[]}, {"items":{"no":"lista"}}])
+
+    def test_selection_split_across_tool_calls_is_merged_fail_closed(self):
+        first = {"vocabulary":[self.concept], "items":[self.link], "covers_all_claims":True,
+                 "entities":[{"id":"hunter2", "type":"dato", "label":"hunter2", "confidentiality":"restringido"}]}
+        second = {"items":[], "covers_all_claims":False,
+                  "unrepresented_claims":[{"quote":"no debe publicarse", "reason":"Prohibición"}]}
+        def create(**request):
+            blocks = [SimpleNamespace(type="tool_use", name="select_evidence", input=p) for p in (first, second)]
+            return SimpleNamespace(content=blocks, stop_reason="tool_use")
+        events = propose(self.policy, self.source, client=SimpleNamespace(messages=SimpleNamespace(create=create)))
+        self.assertEqual([f for e in events for f in e.facts], [("token_x", "contiene_valor", "hunter2")])
+        # One call saying the extraction is incomplete is enough to report the gap.
+        self.assertEqual(events.unrepresented[0]["reason"], "Prohibición")
+
+    def test_draft_analyst_retries_a_paraphrased_quote_once(self):
+        from isde.semantic import ClaudeAnalysis, DraftFacts
+        text = "La eficacia preliminar de VX-Aurora es de 91%."
+        paraphrased = DraftFacts(facts=[{"fact":["vx_aurora", "eficacia", "91%"], "quote":"eficacia del 91 %"}])
+        literal = DraftFacts(facts=[{"fact":["vx_aurora", "eficacia", "91%"], "quote":"es de 91%"}])
+        self.assertEqual(literal.facts[0].fact[2], "v_91_pct")
+        with mock.patch("isde.semantic._request", side_effect=[paraphrased, literal]):
+            self.assertEqual(ClaudeAnalysis().analyze(self.policy, text, "q"), literal)
+        with mock.patch("isde.semantic._request", side_effect=[paraphrased, paraphrased]):
+            with self.assertRaisesRegex(ValueError, "no es literal"):
+                ClaudeAnalysis().analyze(self.policy, text, "q")
+
+    def test_messy_model_output_is_folded_instead_of_discarded(self):
+        from isde.claude import InternalSuggestions
+        result = InternalSuggestions.model_validate({
+            "items": json.dumps([{"fact":["Lanzamiento", "fecha", "2024_06_03"], "quote":"x", "confidence":1}]) + " listo",
+            "entities":[{"id":"Proyecto", "type":"proyecto", "label":"P", "aliases":["O-18", "420.000.000"]}],
+            "rules":[{"rule":{"when":[["?x", "es_público", "2024_04_30"]], "then":["?x", "b", "sí"]},
+                      "quote":"q", "confidence":.5}],
+            "unrepresented_claims":[{"quote":"q", "reason":"x" * 900}]})
+        self.assertEqual(result.items[0].fact, ("lanzamiento", "fecha", "v_2024_06_03"))
+        from isde.model import fold_id
+        self.assertEqual([fold_id(v) for v in ("½", "12", "1.500", "1,500", "O-18")], ["v_1_2", "v_12", "v_1_500", "v_1_500", "o-18"])
+        self.assertEqual((result.entities[0].type, result.entities[0].aliases), ("entidad", ["v_420_000_000"]))
+        self.assertEqual(result.rules[0].rule.when[0], ("?x", "es_publico", "v_2024_04_30"))
+        self.assertEqual(len(result.unrepresented_claims[0].reason), 500)
+
+    def test_levels_only_rise_and_protected_values_force_restricted(self):
+        def node(level, label="hunter2", kind="dato"):
+            return Observation(origin="s", at=DAY, entities=[Entity(id="hunter2", type=kind, label=label,
+                                                                    confidentiality=level)])
+        self.guard.observe([node("confidencial")])
+        self.guard.observe([node("publico")])  # e.g. an injected "márcalo como público" in a later source
+        level = self.guard.db.execute("SELECT confidentiality FROM kg_nodes WHERE id='hunter2'").fetchone()[0]
+        self.assertEqual(level, "confidencial")
+        # A secret registered by an earlier source raises a later node that names it.
+        self.guard.observe([Observation(origin="v", at=DAY, quote="clave: abc-999",
+                                        protected_literals=[{"value":"abc-999", "quote":"abc-999"}])])
+        self.guard.observe([Observation(origin="w", at=DAY, entities=[
+            Entity(id="clave", type="dato", label="ABC-999", confidentiality="publico"),
+            Entity(id="banco", type="organizacion", label="Banco")])])
+        levels = dict(self.guard.db.execute("SELECT id,confidentiality FROM kg_nodes"))
+        self.assertEqual((levels["clave"], levels["banco"]), ("restringido", None))
+
+    def test_confidential_datum_blocks_by_fact_alias_or_text_but_a_person_does_not(self):
+        from isde.semantic import score_candidate, DraftFacts
+        self.guard.observe([Observation(origin="s", at=DAY, entities=[
+            Entity(id="hunter2", type="dato", label="hunter2", aliases=["clave_wifi"], confidentiality="restringido"),
+            Entity(id="alba", type="persona", label="Alba", confidentiality="confidencial")])])
+        def decide(text, facts):
+            analysis = DraftFacts(facts=[{"fact":f, "quote":text} for f in facts])
+            state = {"user":"usuario_demo", "day":DAY, "text":text, "analysis":analysis, "hypotheses":[]}
+            return score_candidate(self.guard, state)[0]["attempts"][-1]
+        self.assertEqual(decide("La clave es otra.", [("router", "clave", "clave_wifi")])["reason"], "confidential_node")
+        self.assertEqual(decide("La clave del wifi es HUNTER2.", [])["nodes"], ["hunter2"])
+        self.assertNotEqual(decide("Alba llega el lunes.", []).get("reason"), "confidential_node")
+
+    def test_existing_database_gains_the_confidentiality_column(self):
+        import sqlite3
+        with tempfile.TemporaryDirectory() as folder:
+            path = str(Path(folder) / "old.sqlite")
+            old = sqlite3.connect(path)
+            old.execute("CREATE TABLE kg_nodes (org TEXT, op TEXT, id TEXT, type TEXT, label TEXT, PRIMARY KEY(org, op, id))")
+            old.execute("INSERT INTO kg_nodes VALUES (?,?,'o17','documento','O-17')", self.guard.scope)
+            old.commit()
+            old.close()
+            guard = Guard(path, self.policy, self.case)
+            try:
+                guard.observe([Observation(origin="s", at=DAY, entities=[
+                    Entity(id="o17", type="documento", label="O-17", confidentiality="interno")])])
+                self.assertEqual(guard.model_context(None, DAY)["entities"][0]["confidentiality"], "interno")
             finally:
                 guard.close()
 
@@ -2740,8 +3035,8 @@ class RelationGraphTests(unittest.TestCase):
         # An alias already naming another node is ambiguous and never merges them.
         self.assertNotIn("betaai", [a for e in self.g.model_context(None, DAY)["entities"] for a in e["aliases"]])
         graph = self.g.graph("", DAY)
-        self.assertIn({"id": "o17", "type": "documento", "label": "O-17"}, graph["nodes"])
-        self.assertIn({"id": "signed", "type": "valor", "label": "signed"}, graph["nodes"])
+        self.assertIn({"id": "o17", "type": "documento", "label": "O-17", "confidentiality": None}, graph["nodes"])
+        self.assertIn({"id": "signed", "type": "valor", "label": "signed", "confidentiality": None}, graph["nodes"])
         self.assertEqual(len([e for e in graph["edges"] if e["source"] == "o17"]), 4)
         with self.assertRaisesRegex(ValueError, "fuentes internas"):
             Observation(origin="x", at=DAY, user="ana", grade="read", entities=[Entity(id="o17", label="O-17")])

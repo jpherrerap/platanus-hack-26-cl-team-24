@@ -6,11 +6,10 @@ from typing import TypedDict
 from langgraph.graph import END, START, StateGraph
 from pydantic import Field
 
-from .claude import CANONICAL_IDS, Source, _request, assess_hypotheses, model_id, propose, read_path, retry_invalid
+from .claude import CANONICAL_IDS, ModelOutput, ModelVocabulary, Source, _request, assess_hypotheses, model_id, propose, read_path, retry_invalid
 from .graphs import describe
 from .guard import Guard
-from .model import (Clause, Hypothesis, INTRINSIC_FAMILY, Model, ModelTriple, Observation, Option, ProtectedLiteral, Task,
-                    VocabularyProposal)
+from .model import Clause, Hypothesis, INTRINSIC_FAMILY, Model, ModelTriple, Observation, Option, ProtectedLiteral, Task
 from .prompts import DEFAULT_PROMPTS
 
 
@@ -23,9 +22,9 @@ EMAIL_TASK = "email"
 FREE_TASKS = {"freeform", EMAIL_TASK}  # Reviews that answer no task of the case.
 
 
-class DraftFacts(Model):
+class DraftFacts(ModelOutput):
     facts: list[CandidateFact] = Field(max_length=64)
-    vocabulary: list[VocabularyProposal] = Field(default_factory=list, max_length=32)
+    vocabulary: list[ModelVocabulary] = Field(default_factory=list, max_length=32)
 
 
 class DraftAssessment(DraftFacts):
@@ -46,7 +45,13 @@ class ClaudeAnalysis:
                 + CANONICAL_IDS + " Reutiliza los predicados compatibles. Si falta una relación para un hecho del "
                 "borrador, defínela en vocabulary con descripción general, cita literal y confidence, y úsala en facts. "
                 "No redefinas predicados ni familias existentes.")
-        return retry_invalid(lambda correction: _request(role + correction, context, DraftFacts, None, None))
+        def ask(correction):
+            result = _request(role + correction, context, DraftFacts, None, None)
+            # A paraphrased quote gets the same single correction as a malformed selection.
+            if any(not item.quote.strip() or item.quote not in text for item in result.facts):
+                raise ValueError("Claude devolvió una cita que no es literal")
+            return result
+        return retry_invalid(ask)
 
     def adversarial(self, policy, text, view):
         return assess_hypotheses(policy, text, view, prompt=self.prompts["adversary"])
@@ -80,6 +85,7 @@ class SourceState(TypedDict, total=False):
     digest: str
     accepted: bool
     missing_recipients: list[str]
+    unrepresented: list[dict]
 
 
 def source_graph(guard: Guard, model: ClaudeAnalysis):
@@ -94,7 +100,8 @@ def source_graph(guard: Guard, model: ClaudeAnalysis):
         declared_values = {protected.value for protected in source.protected_literals}
         events = []
         vocabulary = {}
-        for event in model.source(policy, proposal, None, guard.model_context(None, source.at)):
+        proposed = model.source(policy, proposal, None, guard.model_context(None, source.at))
+        for event in proposed:
             if event.origin != source.origin or event.at != source.at or event.user is not None:
                 raise ValueError("La propuesta no coincide con su fuente")
             for protected in event.protected_literals:
@@ -131,7 +138,7 @@ def source_graph(guard: Guard, model: ClaudeAnalysis):
             for rule in event.rules:
                 rule.validate_source(policy, source.text)
                 rule.validate_source(policy, event.quote)
-        return {"internal": events}
+        return {"internal": events, "unrepresented": list(getattr(proposed, "unrepresented", []))}
 
     def external(state):
         source = state["source"]

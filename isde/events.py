@@ -25,7 +25,7 @@ MESSAGE_TITLES = {"allow": "Se entregó una respuesta sin cambios",
 
 def blocked_disclosure(result):
     return any(attempt.get("blocked") or attempt.get("reason") in {
-        "personal_identifier", "personal_identifier_link", "protected_literal",
+        "personal_identifier", "personal_identifier_link", "protected_literal", "confidential_node",
     } for attempt in result.get("attempts", []))
 
 
@@ -76,11 +76,13 @@ def source_event(guard, source, result):
                   if h.p_if_seen > 0 and (h.claim[1] == INTRINSIC_FAMILY or h.claim[1] in guard.policy.families)]
     missing = result.get("missing_recipients", [])
     sensitive = bool(hypotheses) or any(event.protected_literals for event in observations)
-    if not sensitive and observations and not missing:
+    unrepresented = result.get("unrepresented", [])
+    if not sensitive and observations and not missing and not unrepresented:
         return
-    title = "Se detectó información potencialmente sensible en una fuente" if sensitive else "Una fuente necesita revisión"
+    title = ("Se detectó información potencialmente sensible en una fuente" if sensitive
+             else "Una fuente tiene afirmaciones sin representar" if unrepresented else "Una fuente necesita revisión")
     details = {"origin": "source_analysis", "source_id": source.origin, "source_text": source.text,
-               "model": model_id(), "missing_recipients": missing,
+               "model": model_id(), "missing_recipients": missing, "unrepresented_claims": unrepresented,
                "observations": [e.model_dump(mode="json") for e in observations],
                "notice": "Analizar una entrada no implica que se haya bloqueado una salida."}
     if result.get("analysis_error"):

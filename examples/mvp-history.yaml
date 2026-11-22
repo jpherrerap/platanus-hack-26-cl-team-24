@@ -1,4 +1,4 @@
-# Ontología precargada de los escenarios de la simulación del panel (correo, código, informe).
+# Ontología precargada de los escenarios de la simulación del panel (correo, código, informe, fármaco y vacuna).
 # Generada con Claude al analizar e incorporar cada ejemplo ficticio; se siembra al iniciar la API.
 observations:
 - origin: simulacion_correo
@@ -6,21 +6,19 @@ observations:
   - id: alba
     type: persona
     label: Alba
+    confidentiality: confidencial
+  - id: avenida_ejemplo_123
+    type: dato
+    label: Avenida de Ejemplo 123
+    confidentiality: confidencial
   assessor: claude-haiku-4-5-20251001
   at: '2026-11-22'
 - origin: simulacion_correo
   vocabulary:
   - predicate: domicilio
-    description: Dirección residencial o ubicación física de una persona
+    description: Ubicación del domicilio o dirección física de una persona.
     quote: mi dirección es Avenida de Ejemplo 123
     confidence: 0.95
-  assessor: claude-haiku-4-5-20251001
-  at: '2026-11-22'
-  quote: 'La persona ficticia Alba escribe: mi dirección es Avenida de Ejemplo 123. Es información privada.'
-- origin: simulacion_correo
-  protected_literals:
-  - value: Avenida de Ejemplo 123
-    quote: mi dirección es Avenida de Ejemplo 123. Es información privada.
   assessor: claude-haiku-4-5-20251001
   at: '2026-11-22'
   quote: 'La persona ficticia Alba escribe: mi dirección es Avenida de Ejemplo 123. Es información privada.'
@@ -28,7 +26,7 @@ observations:
   facts:
   - - alba
     - domicilio
-    - avenida_de_ejemplo_123
+    - avenida_ejemplo_123
   at: '2026-11-22'
   quote: mi dirección es Avenida de Ejemplo 123
 - origin: simulacion_codigo
@@ -36,18 +34,27 @@ observations:
   - id: token_interno
     type: dato
     label: TOKEN_INTERNO
+    confidentiality: interno
+  - id: demo_token_no_valido_123
+    type: dato
+    label: DEMO_TOKEN_NO_VALIDO_123
+    confidentiality: restringido
+  - id: credencial
+    type: valor
+    label: credencial
+    confidentiality: interno
   assessor: claude-haiku-4-5-20251001
   at: '2026-11-22'
 - origin: simulacion_codigo
   vocabulary:
-  - predicate: es_credencial_privada
-    description: Indica que un dato es una credencial privada que debe mantenerse confidencial
+  - predicate: contiene_valor
+    description: Enlaza una variable o contenedor (sujeto) con el valor literal que almacena (objeto).
+    quote: la variable TOKEN_INTERNO contiene DEMO_TOKEN_NO_VALIDO_123
+    confidence: 0.95
+  - predicate: uso
+    description: Enlaza una entidad (sujeto) con su propósito o función declarada (objeto).
     quote: Se usa como credencial privada
-    confidence: 0.98
-  - predicate: restriction_divulgacion
-    description: Restricción explícita sobre la divulgación o publicación de un dato
-    quote: no debe publicarse
-    confidence: 0.98
+    confidence: 0.95
   assessor: claude-haiku-4-5-20251001
   at: '2026-11-22'
   quote: En un proyecto ficticio, la variable TOKEN_INTERNO contiene DEMO_TOKEN_NO_VALIDO_123. Se usa como credencial privada;
@@ -55,17 +62,17 @@ observations:
 - origin: simulacion_codigo
   facts:
   - - token_interno
-    - es_credencial_privada
-    - verdadero
+    - contiene_valor
+    - demo_token_no_valido_123
   at: '2026-11-22'
-  quote: Se usa como credencial privada; no debe publicarse.
+  quote: la variable TOKEN_INTERNO contiene DEMO_TOKEN_NO_VALIDO_123
 - origin: simulacion_codigo
   facts:
   - - token_interno
-    - restriction_divulgacion
-    - no_publicar
+    - uso
+    - credencial
   at: '2026-11-22'
-  quote: no debe publicarse
+  quote: Se usa como credencial privada
 - origin: simulacion_codigo
   protected_literals:
   - value: DEMO_TOKEN_NO_VALIDO_123
@@ -78,26 +85,31 @@ observations:
   - id: alba
     type: persona
     label: Alba
+    confidentiality: confidencial
+  - id: diagnostico_medico_alba
+    type: dato
+    label: diagnóstico médico
+    confidentiality: confidencial
+  - id: revision_equipo
+    type: evento
+    label: revisión del equipo
+    confidentiality: interno
+  - id: viernes
+    type: valor
+    label: viernes
+    confidentiality: interno
   assessor: claude-haiku-4-5-20251001
   at: '2026-11-22'
 - origin: simulacion_informe
   vocabulary:
-  - predicate: puede_compartirse
-    description: Indica que un dato o resultado de un evento puede ser compartido o divulgado según lo reportado
-    quote: puede compartirse
-    confidence: 0.88
-  - predicate: type_evento
-    description: Clasificación o tipo de un evento según su naturaleza o propósito
-    quote: La revisión del equipo terminó el viernes
-    confidence: 0.9
-  assessor: claude-haiku-4-5-20251001
-  at: '2026-11-22'
-  quote: 'Documento ficticio de personal: Alba tiene un diagnóstico médico reservado. La revisión del equipo terminó el viernes
-    y puede compartirse.'
-- origin: simulacion_informe
-  protected_literals:
-  - value: diagnóstico médico
+  - predicate: tiene_diagnostico
+    description: Enlaza a una persona (sujeto) con su diagnóstico médico (objeto).
     quote: Alba tiene un diagnóstico médico reservado
+    confidence: 0.95
+  - predicate: finalizacion_temporal
+    description: Enlaza un evento (sujeto) con el momento temporal en que finalizó (objeto).
+    quote: La revisión del equipo terminó el viernes
+    confidence: 0.95
   assessor: claude-haiku-4-5-20251001
   at: '2026-11-22'
   quote: 'Documento ficticio de personal: Alba tiene un diagnóstico médico reservado. La revisión del equipo terminó el viernes
@@ -105,21 +117,260 @@ observations:
 - origin: simulacion_informe
   facts:
   - - alba
-    - restriction_divulgacion
-    - no_compartir_sin_autorizacion
+    - tiene_diagnostico
+    - diagnostico_medico_alba
   at: '2026-11-22'
   quote: Alba tiene un diagnóstico médico reservado
 - origin: simulacion_informe
   facts:
-  - - alba_medical_review
-    - type_evento
-    - revision_medica
+  - - revision_equipo
+    - finalizacion_temporal
+    - viernes
   at: '2026-11-22'
   quote: La revisión del equipo terminó el viernes
-- origin: simulacion_informe
-  facts:
-  - - alba_medical_review
-    - puede_compartirse
-    - verdadero
+- origin: simulacion_farmaco
+  entities:
+  - id: obo
+    type: dato
+    label: Obo
+    aliases:
+    - nombre_clave_obo
+    - obo_farmaco
+    confidentiality: restringido
+  - id: farmaco
+    type: valor
+    label: fármaco
+    confidentiality: interno
+  - id: proximo_trimestre
+    type: valor
+    label: próximo trimestre
+    confidentiality: interno
+  - id: equipo_id
+    type: organizacion
+    label: equipo de I+D
+    aliases:
+    - equipo_investigacion_desarrollo
+    confidentiality: interno
+  - id: ano_2024
+    type: valor
+    label: '2024'
+    confidentiality: interno
+  - id: laboratorios_quintral
+    type: organizacion
+    label: Laboratorios Quintral
+    confidentiality: publico
+  assessor: claude-haiku-4-5-20251001
   at: '2026-11-22'
-  quote: puede compartirse
+- origin: simulacion_farmaco
+  vocabulary:
+  - predicate: es_un
+    description: Enlaza una entidad (sujeto) con su clasificación o tipo (objeto).
+    quote: Obo es el nombre clave de un fármaco ultrasecreto
+    confidence: 0.98
+  - predicate: lanzamiento
+    description: Enlaza un producto o entidad (sujeto) con el momento temporal en que saldrá al mercado (objeto).
+    quote: saldrá al mercado el próximo trimestre
+    confidence: 0.95
+  - predicate: trabaja_en
+    description: Enlaza un equipo u organización (sujeto) con un proyecto o entidad en la que trabaja (objeto).
+    quote: El equipo de I+D trabaja en Obo desde 2024
+    confidence: 0.95
+  - predicate: inicio_desarrollo
+    description: Enlaza un proyecto o producto (sujeto) con el momento temporal en que comenzó su desarrollo (objeto).
+    quote: El equipo de I+D trabaja en Obo desde 2024
+    confidence: 0.95
+  assessor: claude-haiku-4-5-20251001
+  at: '2026-11-22'
+  quote: 'Memo interno ficticio de Laboratorios Quintral: Obo es el nombre clave de un fármaco ultrasecreto que saldrá al
+    mercado el próximo trimestre. El equipo de I+D trabaja en Obo desde 2024. Está prohibido revelar que Obo es un fármaco
+    o que se está trabajando en él.'
+- origin: simulacion_farmaco
+  facts:
+  - - obo
+    - es_un
+    - farmaco
+  at: '2026-11-22'
+  quote: Obo es el nombre clave de un fármaco ultrasecreto
+- origin: simulacion_farmaco
+  facts:
+  - - obo
+    - lanzamiento
+    - proximo_trimestre
+  at: '2026-11-22'
+  quote: saldrá al mercado el próximo trimestre
+- origin: simulacion_farmaco
+  facts:
+  - - equipo_id
+    - trabaja_en
+    - obo
+  at: '2026-11-22'
+  quote: El equipo de I+D trabaja en Obo desde 2024
+- origin: simulacion_farmaco
+  facts:
+  - - obo
+    - inicio_desarrollo
+    - ano_2024
+  at: '2026-11-22'
+  quote: El equipo de I+D trabaja en Obo desde 2024
+- origin: simulacion_vacuna
+  entities:
+  - id: vx_aurora
+    type: dato
+    label: VX-Aurora
+    aliases:
+    - vacuna_vx_aurora
+    confidentiality: restringido
+  - id: vacuna
+    type: valor
+    label: vacuna
+    confidentiality: interno
+  - id: contra_virus_sincicial
+    type: valor
+    label: contra el virus respiratorio sincicial
+    aliases:
+    - virus_respiratorio_sincicial
+    confidentiality: interno
+  - id: fase_iii
+    type: valor
+    label: fase III
+    confidentiality: interno
+  - id: en_curso
+    type: valor
+    label: en curso
+    confidentiality: interno
+  - id: chile
+    type: valor
+    label: Chile
+    confidentiality: publico
+  - id: peru
+    type: valor
+    label: Perú
+    confidentiality: publico
+  - id: v_4800_voluntarios
+    type: dato
+    label: 4.800 voluntarios
+    aliases:
+    - cantidad_voluntarios_4800
+    confidentiality: confidencial
+  - id: eficacia_91_porciento
+    type: dato
+    label: 91% de eficacia
+    aliases:
+    - eficacia_preliminar_91
+    confidentiality: confidencial
+  - id: biovacunas_del_sur
+    type: organizacion
+    label: Biovacunas del Sur
+    confidentiality: publico
+  - id: ensayos_vx_aurora
+    type: dato
+    label: ensayos_vx_aurora
+    confidentiality: restringido
+  - id: ensayo_clinico
+    type: dato
+    label: ensayo_clinico
+    confidentiality: interno
+  assessor: claude-haiku-4-5-20251001
+  at: '2026-11-22'
+- origin: simulacion_vacuna
+  vocabulary:
+  - predicate: fase
+    description: Enlaza un evento de ensayo clínico (sujeto) con su fase o etapa de desarrollo (objeto).
+    quote: ensayos clínicos de fase III en curso
+    confidence: 0.95
+  - predicate: estado
+    description: Enlaza un evento o proceso (sujeto) con su estado actual (objeto).
+    quote: ensayos clínicos de fase III en curso
+    confidence: 0.95
+  - predicate: ubicacion
+    description: Enlaza un evento o actividad (sujeto) con la localidad geográfica donde se realiza (objeto).
+    quote: con 4.800 voluntarios en Chile y Perú
+    confidence: 0.95
+  - predicate: cantidad_voluntarios
+    description: Enlaza un ensayo clínico (sujeto) con el número de participantes voluntarios (objeto).
+    quote: con 4.800 voluntarios en Chile y Perú
+    confidence: 0.95
+  - predicate: eficacia_preliminar
+    description: Enlaza un evento de ensayo clínico (sujeto) con el porcentaje de eficacia observado en resultados previos
+      (objeto).
+    quote: Los resultados preliminares muestran 91% de eficacia
+    confidence: 0.95
+  - predicate: estudiado_en
+    description: Enlaza un producto o sustancia (sujeto) con el ensayo o investigación en el que participa (objeto).
+    quote: está en ensayos clínicos de fase III
+    confidence: 0.95
+  assessor: claude-haiku-4-5-20251001
+  at: '2026-11-22'
+  quote: 'Informe confidencial ficticio de Biovacunas del Sur: la vacuna VX-Aurora contra el virus respiratorio sincicial
+    está en ensayos clínicos de fase III en curso, con 4.800 voluntarios en Chile y Perú. Los resultados preliminares muestran
+    91% de eficacia. La existencia de los ensayos no se ha anunciado y no debe comunicarse.'
+- origin: simulacion_vacuna
+  facts:
+  - - vx_aurora
+    - es_un
+    - vacuna
+  at: '2026-11-22'
+  quote: la vacuna VX-Aurora contra el virus respiratorio sincicial
+- origin: simulacion_vacuna
+  facts:
+  - - vx_aurora
+    - uso
+    - contra_virus_sincicial
+  at: '2026-11-22'
+  quote: la vacuna VX-Aurora contra el virus respiratorio sincicial
+- origin: simulacion_vacuna
+  facts:
+  - - ensayos_vx_aurora
+    - es_un
+    - ensayo_clinico
+  at: '2026-11-22'
+  quote: está en ensayos clínicos de fase III
+- origin: simulacion_vacuna
+  facts:
+  - - ensayos_vx_aurora
+    - fase
+    - fase_iii
+  at: '2026-11-22'
+  quote: ensayos clínicos de fase III en curso
+- origin: simulacion_vacuna
+  facts:
+  - - ensayos_vx_aurora
+    - estado
+    - en_curso
+  at: '2026-11-22'
+  quote: ensayos clínicos de fase III en curso
+- origin: simulacion_vacuna
+  facts:
+  - - ensayos_vx_aurora
+    - ubicacion
+    - chile
+  at: '2026-11-22'
+  quote: con 4.800 voluntarios en Chile y Perú
+- origin: simulacion_vacuna
+  facts:
+  - - ensayos_vx_aurora
+    - ubicacion
+    - peru
+  at: '2026-11-22'
+  quote: con 4.800 voluntarios en Chile y Perú
+- origin: simulacion_vacuna
+  facts:
+  - - ensayos_vx_aurora
+    - cantidad_voluntarios
+    - v_4800_voluntarios
+  at: '2026-11-22'
+  quote: con 4.800 voluntarios en Chile y Perú
+- origin: simulacion_vacuna
+  facts:
+  - - ensayos_vx_aurora
+    - eficacia_preliminar
+    - eficacia_91_porciento
+  at: '2026-11-22'
+  quote: Los resultados preliminares muestran 91% de eficacia
+- origin: simulacion_vacuna
+  facts:
+  - - vx_aurora
+    - estudiado_en
+    - ensayos_vx_aurora
+  at: '2026-11-22'
+  quote: está en ensayos clínicos de fase III

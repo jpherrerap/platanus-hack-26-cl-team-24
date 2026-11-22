@@ -62,7 +62,7 @@ class AdversarialOntologyTests(unittest.TestCase):
                          "podría activarse al anochecer si el relevo se retrasa")
         self.assertNotIn(("nimbo", "automation_active_at", "dusk"), facts(events))
 
-    @unittest.expectedFailure
+    # Passes because a boolean object is a flag and never becomes a fact; modality itself is still unchecked.
     def test_no_convierte_un_evento_prevenido_en_evento_ocurrido(self):
         text = "El resguardo evitó una exposición cuando la puerta quedó abierta."
         events = extract(text, ("nimbo", "exposure_occurred", "yes"),
