@@ -1433,6 +1433,31 @@ class AgentApiTests(unittest.TestCase):
         self.assertEqual(len(self.client.get("/v1/inbox/ana").json()["messages"]), 1)
         self.assertEqual(self.client.post("/v1/messages", json=second).json(), result)
 
+    def test_every_message_decision_appears_in_activity_without_text(self):
+        from fastapi.testclient import TestClient
+        from isde.api import create_app
+        with mock.patch.dict(os.environ, {"MOSAIC_OPERATOR_TOKEN": "secreto"}):
+            client = TestClient(create_app(db=str(Path(self.tmp.name) / "events.sqlite"),
+                                           rewrite=lambda draft, safe_answer, task: safe_answer))
+        allow = {**self.request, "user": "ana"}
+        review = {**allow, "task": "record", "request_id": "r2", "day": "2026-01-05",
+                  "draft": "El expediente O-17 ya está firmado."}
+        for body in (allow, review, self.request, self.request):  # the last one replays r1 for luis
+            self.assertEqual(client.post("/v1/messages", json=body).status_code, 200)
+        listing = client.get("/v1/demo/events").json()
+        self.assertEqual(sorted((e["kind"], e["status"], e["target_type"]) for e in listing["events"]),
+                         [("allowed", "delivered", "message"), ("blocked", "open", "message"),
+                          ("blocked", "open", "message")])
+        self.assertEqual(listing["counts"], {"total": 3, "blocked": 2, "flagged": 0, "allowed": 1, "open": 2})
+        titles = {e["title"] for e in listing["events"]}
+        self.assertIn("Se reparó una respuesta antes de entregarla", titles)  # luis: original draft was blocked
+        self.assertIn("Se retuvo una respuesta para revisión humana", titles)
+        for event in listing["events"]:
+            detail = client.get(f"/v1/demo/events/{event['id']}", headers={"x-mosaic-operator-token": "secreto"}).json()
+            self.assertEqual(detail["details"]["origin"], "message_api")
+            self.assertNotIn("O-17", json.dumps(detail, ensure_ascii=False))
+            self.assertNotIn("viernes", json.dumps(detail, ensure_ascii=False))
+
     def test_unknown_agent_text_requires_recognizable_rewrite(self):
         from fastapi.testclient import TestClient
         from isde.api import create_app
@@ -1806,7 +1831,7 @@ class SemanticApiTests(unittest.TestCase):
         self.assertEqual(result.json()["status"], "revise")
         self.assertEqual(self.client.post("/v1/reviews", json=self.data).json(), result.json())
         feed = self.client.get("/v1/demo/events").json()
-        self.assertEqual(feed["counts"], {"total":1, "blocked":1, "flagged":0, "open":1})
+        self.assertEqual(feed["counts"], {"total":1, "blocked":1, "flagged":0, "allowed":0, "open":1})
         self.assertNotIn("BetaAI", str(feed))
         self.assertNotIn("logs", str(feed))
         event_id = feed["events"][0]["id"]

@@ -366,6 +366,8 @@ def create_app(*, db: str | None = None, rewrite=claude_rewrite, seed=True, mode
                     "fingerprint": token, "candidate": with_attachments(item.draft, item.attachments), "rewrites": 0,
                 })
                 outcome = flow["outcome"]
+                activity_events.message_event(guard, item.request_id, item.user, item.task, outcome,
+                                              flow.get("screened", outcome))
                 return {"request_id": item.request_id, "action": outcome["action"], "text": outcome["text"]}
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
