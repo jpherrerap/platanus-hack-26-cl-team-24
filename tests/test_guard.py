@@ -1772,6 +1772,62 @@ class SemanticApiTests(unittest.TestCase):
         self.assertEqual(self.client.post("/v1/reviews", json={**data, "review_id":"blank", "question":"  "}).status_code, 400)
         self.assertEqual(self.client.post("/v1/reviews", json={**data, "review_id":"unknown", "task":"missing"}).status_code, 400)
 
+    def test_structured_output_validation_on_first_review_and_rewrite(self):
+        from fastapi.testclient import TestClient
+        from isde.api import create_app
+        valid = lambda fact, quote: {"facts":[{"fact":fact, "quote":quote}], "covers_all_claims":True, "fulfills_task":True}
+        # Anthropic accepts these: the schema it receives has no tuple length or ID pattern.
+        invalid = valid(["O-17", "deadline"], "viernes")
+        drafts, systems, sent = [], [], {}
+        def create(**request):
+            schema = request["output_config"]["format"]["schema"]
+            if schema["title"] == "DraftAssessment":
+                systems.append(request["system"])
+                sent["schema"] = schema
+                payload = drafts.pop(0)
+            else:
+                payload = {"hypotheses":[]} if schema["title"] == "Interpretations" else \
+                          {"relation":"vínculo", "implies_goal":False, "confidence":0}
+            return SimpleNamespace(content=[SimpleNamespace(type="text", text=json.dumps(payload))], stop_reason="end_turn")
+        fake = SimpleNamespace(messages=SimpleNamespace(create=create))
+        env = mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY":"sk-ant-test", "MOSAIC_CLAUDE_MODEL":"claude-opus-5-5"})
+        with env, mock.patch("anthropic.Anthropic", return_value=fake):
+            client = TestClient(create_app(db=self.path, seed=False))
+            drafts[:] = [invalid, invalid]
+            failed = client.post("/v1/reviews", json={**self.data, "review_id":"first-bad"})
+            self.assertEqual(failed.status_code, 400)
+            detail = failed.json()["detail"]
+            self.assertIn("no cumple la validación local", detail)
+            self.assertIn("esquema DraftAssessment", detail)
+            self.assertIn("facts.0.fact.0 [string_pattern_mismatch]", detail)
+            self.assertIn("facts.0.fact.2 [missing]", detail)
+            self.assertNotIn("O-17", detail)
+            self.assertIn("minItems=3", json.dumps(sent["schema"]["$defs"]["CandidateFact"]))
+
+            drafts[:] = [valid(list(LINK), "BetaAI")]
+            self.assertEqual(client.post("/v1/reviews", json=self.data).json()["status"], "revise")
+            friday = valid(["o17", "deadline", "friday"], "viernes")
+            drafts[:] = [invalid, friday]
+            systems.clear()
+            revision = {"user":"luis", "revision_id":"retry", "text":"El plazo acaba el viernes."}
+            self.assertEqual(client.post("/v1/reviews/rev-1/revisions", json=revision).json()["status"], "approved")
+            self.assertNotIn("validación local", systems[0])
+            self.assertIn("facts.0.fact.2 [missing]", systems[1])
+            self.assertNotIn("O-17", systems[1])
+
+            drafts[:] = [valid(list(LINK), "BetaAI")]
+            self.assertEqual(client.post("/v1/reviews", json={**self.data, "review_id":"rev-2"}).json()["status"], "revise")
+            drafts[:] = [invalid, invalid]
+            bad = client.post("/v1/reviews/rev-2/revisions", json={**revision, "revision_id":"bad"})
+            self.assertEqual(bad.status_code, 400)
+            self.assertIn("esquema DraftAssessment", bad.json()["detail"])
+            # An unevaluated rewrite stays blocked and can still be retried.
+            self.assertEqual(client.post("/v1/reviews/rev-2/deliver", json={"user":"luis"}).status_code, 400)
+            self.assertEqual(client.get("/v1/inbox/luis").json()["messages"], [])
+            drafts[:] = [friday]
+            self.assertEqual(client.post("/v1/reviews/rev-2/revisions", json={**revision, "revision_id":"good"}).json()["status"],
+                             "approved")
+
     def test_prompt_or_secret_change_invalidates_approved_reviews(self):
         for index, change in enumerate(("prompt", "secret")):
             data = {**self.data, "review_id":f"stale-{index}", "user":"ana", "task":"freeform",
