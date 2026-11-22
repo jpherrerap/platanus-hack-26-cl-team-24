@@ -191,7 +191,8 @@ def create_app(*, db: str | None = None, rewrite=claude_rewrite, seed=True, mode
                 guard.close()
 
     @app.put("/v1/demo/prompts/{agent}")
-    def update_prompt(agent: str, item: PromptUpdate):
+    def update_prompt(agent: str, item: PromptUpdate, x_mosaic_operator_token: str = Header(default="")):
+        require_operator(x_mosaic_operator_token)
         if agent not in DEFAULT_PROMPTS or not item.prompt.strip():
             raise HTTPException(status_code=400, detail="Agente o prompt inválido")
         with lock:
@@ -206,8 +207,9 @@ def create_app(*, db: str | None = None, rewrite=claude_rewrite, seed=True, mode
                 guard.close()
 
     @app.put("/v1/demo/secrets/{name}")
-    def update_secret(name: str, item: SecretUpdate):
+    def update_secret(name: str, item: SecretUpdate, x_mosaic_operator_token: str = Header(default="")):
         nonlocal policy
+        require_operator(x_mosaic_operator_token)
         with lock:
             guard = open_guard()
             try:
@@ -248,8 +250,9 @@ def create_app(*, db: str | None = None, rewrite=claude_rewrite, seed=True, mode
                 guard.close()
 
     @app.put("/v1/demo/vocabulary/{name}")
-    def update_vocabulary(name: str, item: VocabularyUpdate):
+    def update_vocabulary(name: str, item: VocabularyUpdate, x_mosaic_operator_token: str = Header(default="")):
         nonlocal policy
+        require_operator(x_mosaic_operator_token)
         with lock:
             guard = open_guard()
             try:
@@ -268,7 +271,8 @@ def create_app(*, db: str | None = None, rewrite=claude_rewrite, seed=True, mode
                 guard.close()
 
     @app.post("/v1/demo/sources/preview")
-    def preview_source(source: SourceInput):
+    def preview_source(source: SourceInput, x_mosaic_operator_token: str = Header(default="")):
+        require_operator(x_mosaic_operator_token)
         with lock:
             guard = open_guard()
             try:
@@ -308,7 +312,8 @@ def create_app(*, db: str | None = None, rewrite=claude_rewrite, seed=True, mode
                 guard.close()
 
     @app.post("/v1/demo/sources/{preview_id}/accept")
-    def accept_source(preview_id: str):
+    def accept_source(preview_id: str, x_mosaic_operator_token: str = Header(default="")):
+        require_operator(x_mosaic_operator_token)
         with lock:
             if preview_id not in staged_sources:
                 raise HTTPException(status_code=404, detail="Propuesta no disponible; vuelve a analizar la fuente")

@@ -18,6 +18,14 @@ from rdflib import RDF
 from isde.guard import Guard
 from isde.model import Assignment, Batch, Case, Clause, Entity, Hypothesis, Observation, Option, Policy, Task
 
+# The demo's write endpoints require the operator token; tests send the one create_app read from the environment.
+os.environ.setdefault("MOSAIC_OPERATOR_TOKEN", "operator-test")
+
+
+def op():
+    return {"X-Mosaic-Operator-Token": os.environ.get("MOSAIC_OPERATOR_TOKEN", "")}
+
+
 ROOT = Path(__file__).resolve().parents[1] / "examples"
 DAY = date(2026, 1, 4)
 SIGN = ("o17", "signature", "signed")
@@ -220,13 +228,13 @@ class DynamicVocabularyTests(unittest.TestCase):
                         ("sobre_recurso", "servidor_azul", "servidor azul"),
                         ("condicionado_a_conocer", "ubicacion_construccion_servidor_azul",
                          "apenas sepan donde se va a construir")]]})
-        with tempfile.TemporaryDirectory() as folder, mock.patch.dict(os.environ, {}, clear=True), \
+        with tempfile.TemporaryDirectory() as folder, mock.patch.dict(os.environ, {"MOSAIC_OPERATOR_TOKEN": "operator-test"}, clear=True), \
              mock.patch("isde.claude._request", side_effect=fake):
             path = str(Path(folder) / "data.sqlite")
             client = TestClient(create_app(db=path, seed=False))
-            self.assertEqual(client.put("/v1/demo/prompts/ontology", json={"prompt":"PROMPT ANTERIOR GUARDADO"}).status_code, 200)
+            self.assertEqual(client.put("/v1/demo/prompts/ontology", headers=op(), json={"prompt":"PROMPT ANTERIOR GUARDADO"}).status_code, 200)
             body = {"origin":"correo_bomb", "at":DAY.isoformat(), "text":text, "recipients":[]}
-            response = client.post("/v1/demo/sources/preview", json=body)
+            response = client.post("/v1/demo/sources/preview", headers=op(), json=body)
             self.assertEqual(response.status_code, 200, response.text)
             preview = response.json()
             self.assertIsNotNone(preview["preview_id"])
@@ -234,7 +242,7 @@ class DynamicVocabularyTests(unittest.TestCase):
             guard = Guard(path, self.policy, self.case)
             self.assertEqual(guard.proposed_vocabulary(DAY), [])
             guard.close()
-            accepted = client.post(f"/v1/demo/sources/{preview['preview_id']}/accept")
+            accepted = client.post(f"/v1/demo/sources/{preview['preview_id']}/accept", headers=op())
             self.assertTrue(accepted.json()["accepted"], accepted.text)
             self.assertEqual(len(calls), 2)
             guard = Guard(path, self.policy, self.case)
@@ -297,7 +305,7 @@ class DynamicVocabularyTests(unittest.TestCase):
                 body = {"origin":"incompleta_" + str(index), "at":DAY.isoformat(), "text":self.source_text}
                 if endpoint == "/v1/sources":
                     body["accept"] = True
-                response = client.post(endpoint, json=body)
+                response = client.post(endpoint, headers=op(), json=body)
                 self.assertEqual(response.status_code, 400, response.text)
                 self.assertIn(reason, response.json()["detail"])
             feed = client.get("/v1/demo/events").json()
@@ -396,13 +404,13 @@ class DynamicVocabularyTests(unittest.TestCase):
                 return schema(hypotheses=[Hypothesis(claim=("remitente_correo_01","intrinsic_sensitivity","domicilio"),
                                                      quote="Roble 10", p_if_seen=.9)])
             self.fail(f"Esquema inesperado: {schema}")
-        with tempfile.TemporaryDirectory() as folder, mock.patch.dict(os.environ, {}, clear=True), \
+        with tempfile.TemporaryDirectory() as folder, mock.patch.dict(os.environ, {"MOSAIC_OPERATOR_TOKEN": "operator-test"}, clear=True), \
              mock.patch("isde.claude._request", side_effect=fake), mock.patch("isde.semantic._request", side_effect=fake):
             path = str(Path(folder) / "data.sqlite")
             client = TestClient(create_app(db=path))
             body = {"origin":"correo_01", "at":DAY.isoformat(), "text":self.source_text,
                     "recipients":["usuario_demo"]}
-            preview = client.post("/v1/demo/sources/preview", json=body)
+            preview = client.post("/v1/demo/sources/preview", headers=op(), json=body)
             self.assertEqual(preview.status_code, 200, preview.text)
             proposal = preview.json()
             self.assertEqual(proposal["observations"][0]["vocabulary"][0]["predicate"], "domicilio")
@@ -411,7 +419,7 @@ class DynamicVocabularyTests(unittest.TestCase):
                 self.assertEqual(before.proposed_vocabulary(DAY), [])
             finally:
                 before.close()
-            accepted = client.post(f"/v1/demo/sources/{proposal['preview_id']}/accept")
+            accepted = client.post(f"/v1/demo/sources/{proposal['preview_id']}/accept", headers=op())
             self.assertEqual(accepted.status_code, 200, accepted.text)
             self.assertTrue(accepted.json()["accepted"])
             self.assertIn("domicilio", client.get("/v1/demo/config").json()["vocabulary"])
@@ -495,11 +503,11 @@ class DynamicVocabularyTests(unittest.TestCase):
                         Observation(origin=source.origin, at=source.at, quote="mi direccion es Roble 10",
                                     facts=[self.fact])]
         model = Model()
-        with tempfile.TemporaryDirectory() as folder, mock.patch.dict(os.environ, {}, clear=True):
+        with tempfile.TemporaryDirectory() as folder, mock.patch.dict(os.environ, {"MOSAIC_OPERATOR_TOKEN": "operator-test"}, clear=True):
             path = str(Path(folder) / "data.sqlite")
             client = TestClient(create_app(db=path, model=model))
             body = {"origin":"correo_01", "at":DAY.isoformat(), "text":self.source_text, "recipients":[]}
-            preview = client.post("/v1/demo/sources/preview", json=body).json()
+            preview = client.post("/v1/demo/sources/preview", headers=op(), json=body).json()
             self.assertIsNone(preview["preview_id"])
             self.assertEqual(preview["observations"], [])
             self.assertFalse(client.post("/v1/sources", json={**body, "accept":True}).json()["accepted"])
@@ -511,9 +519,9 @@ class DynamicVocabularyTests(unittest.TestCase):
             finally:
                 guard.close()
             model.ready = True
-            retry = client.post("/v1/demo/sources/preview", json=body).json()
-            self.assertTrue(client.post(f"/v1/demo/sources/{retry['preview_id']}/accept").json()["accepted"])
-            self.assertFalse(client.post(f"/v1/demo/sources/{retry['preview_id']}/accept").json()["accepted"])
+            retry = client.post("/v1/demo/sources/preview", headers=op(), json=body).json()
+            self.assertTrue(client.post(f"/v1/demo/sources/{retry['preview_id']}/accept", headers=op()).json()["accepted"])
+            self.assertFalse(client.post(f"/v1/demo/sources/{retry['preview_id']}/accept", headers=op()).json()["accepted"])
 
     @unittest.skipUnless(all(importlib.util.find_spec(n) for n in ("fastapi", "langgraph", "httpx")),
                          "Instala el extra api")
@@ -528,12 +536,12 @@ class DynamicVocabularyTests(unittest.TestCase):
                                     vocabulary=[self.concept]),
                         Observation(origin=source.origin, at=source.at, quote="mi direccion es Roble 10",
                                     facts=[self.fact])]
-        with tempfile.TemporaryDirectory() as folder, mock.patch.dict(os.environ, {}, clear=True):
+        with tempfile.TemporaryDirectory() as folder, mock.patch.dict(os.environ, {"MOSAIC_OPERATOR_TOKEN": "operator-test"}, clear=True):
             path = str(Path(folder)/"data.sqlite")
             client = TestClient(create_app(db=path, model=Model()))
             body = {"origin":"correo_01", "at":DAY.isoformat(), "text":self.source_text,
                     "recipients":["usuario_demo"]}
-            preview = client.post("/v1/demo/sources/preview", json=body).json()
+            preview = client.post("/v1/demo/sources/preview", headers=op(), json=body).json()
             self.assertIsNone(preview["preview_id"])
             self.assertIn("usuario_demo", preview["message"])
             self.assertTrue(preview["observations"])
@@ -657,14 +665,14 @@ class GenericSecretTests(unittest.TestCase):
                                        covers_all_claims=True, fulfills_task=True)
             def adversarial(self, policy, text, view):
                 return []
-        with tempfile.TemporaryDirectory() as folder, mock.patch.dict(os.environ, {}, clear=True):
+        with tempfile.TemporaryDirectory() as folder, mock.patch.dict(os.environ, {"MOSAIC_OPERATOR_TOKEN": "operator-test"}, clear=True):
             client = TestClient(create_app(db=str(Path(folder)/"db.sqlite"), model=Model()))
             config = client.get("/v1/demo/config").json()
             self.assertEqual(config["families"], {})
             self.assertEqual(config["users"], ["revisor_demo", "usuario_demo"])
             self.assertNotIn("offer_status", str(config))
             self.assertIn("Cualquier valor", client.get("/").text)
-            self.assertEqual(client.put("/v1/demo/vocabulary/actividad", json={"description":"Actividad"}).status_code, 200)
+            self.assertEqual(client.put("/v1/demo/vocabulary/actividad", headers=op(), json={"description":"Actividad"}).status_code, 200)
             self.assertEqual(client.post("/v1/observations", json={"observations":[{"origin":"private", "at":DAY.isoformat(),
                                   "facts":[["p","actividad","dato"]]}]}).status_code, 200)
             body = {"review_id":"empty", "user":"usuario_demo", "task":"freeform", "question":"¿Qué dato?",
@@ -672,9 +680,9 @@ class GenericSecretTests(unittest.TestCase):
             self.assertEqual(client.post("/v1/reviews", json=body).json()["status"], "approved")
             secret = {"description":"Cualquier actividad", "any_value":True,
                       "absolute":.75, "increase":.45, "allowed_roles":[]}
-            self.assertEqual(client.put("/v1/demo/secrets/actividad", json=secret).status_code, 200)
+            self.assertEqual(client.put("/v1/demo/secrets/actividad", headers=op(), json=secret).status_code, 200)
             self.assertTrue(client.get("/v1/demo/config").json()["families"]["actividad"]["any_value"])
-            self.assertEqual(client.put("/v1/demo/secrets/actividad", json={**secret, "any_value":False,
+            self.assertEqual(client.put("/v1/demo/secrets/actividad", headers=op(), json={**secret, "any_value":False,
                                       "statuses":["dato"]}).status_code, 400)
             self.assertEqual(client.post("/v1/reviews", json={**body, "review_id":"wild"}).json()["status"], "revise")
             self.assertEqual(client.get("/v1/inbox/usuario_demo").json()["messages"], [])
@@ -744,7 +752,7 @@ class GenericSecretTests(unittest.TestCase):
         image = {"name":"foto.png", "media_type":"image/png", "data":base64.b64encode(b"\x89PNG").decode()}
         body = {"review_id":"adjunto", "user":"usuario_demo", "task":"freeform", "question":"Saluda",
                 "day":DAY.isoformat(), "text":"Hola.", "attachments":[image]}
-        with tempfile.TemporaryDirectory() as folder, mock.patch.dict(os.environ, {}, clear=True), \
+        with tempfile.TemporaryDirectory() as folder, mock.patch.dict(os.environ, {"MOSAIC_OPERATOR_TOKEN": "operator-test"}, clear=True), \
              mock.patch("isde.media._request", ocr):
             client = TestClient(create_app(db=str(Path(folder)/"db.sqlite"), model=Model()))
             self.assertEqual(client.post("/v1/reviews", json=body).json()["status"], "revise")
@@ -784,7 +792,7 @@ class GenericSecretTests(unittest.TestCase):
                 return DraftAssessment(facts=[], covers_all_claims=True, fulfills_task=True, has_factual_claims=False)
             def adversarial(self, policy, text, view):
                 raise RuntimeError("modelo no disponible")
-        with tempfile.TemporaryDirectory() as folder, mock.patch.dict(os.environ, {}, clear=True):
+        with tempfile.TemporaryDirectory() as folder, mock.patch.dict(os.environ, {"MOSAIC_OPERATOR_TOKEN": "operator-test"}, clear=True):
             client = TestClient(create_app(db=str(Path(folder)/"db.sqlite"), model=Model()))
             body = {"review_id":"failure", "user":"usuario_demo", "task":"freeform", "question":"Saluda",
                     "day":DAY.isoformat(), "text":"Hola."}
@@ -1530,7 +1538,7 @@ class AgentApiTests(unittest.TestCase):
         self.assertEqual(text, "Hola.\n\n[Adjunto: nota.mp3]\nLa oferta está firmada.")
         self.assertEqual((sent["headers"], sent["data"]), ({"xi-api-key": "k"}, {"model_id": "scribe_v2"}))
         self.assertEqual(sent["files"]["file"], ("nota.mp3", b"ID3", "audio/mpeg"))
-        with mock.patch.dict(os.environ, {}, clear=True), mock.patch("isde.media.stt_key", return_value=None):
+        with mock.patch.dict(os.environ, {"MOSAIC_OPERATOR_TOKEN": "operator-test"}, clear=True), mock.patch("isde.media.stt_key", return_value=None):
             self.assertIsNone(with_attachments("Hola.", [audio], http=Http()))
         class Down:
             def post(self, *args, **kwargs):
@@ -1826,16 +1834,16 @@ class SemanticApiTests(unittest.TestCase):
         start = self.client.get("/v1/demo/config").json()
         self.assertEqual(set(start["prompts"]), {"ontology", "adversary", "analyst", "rewriter"})
         for agent in start["prompts"]:
-            result = self.client.put(f"/v1/demo/prompts/{agent}", json={"prompt": f"Prompt {agent}"})
+            result = self.client.put(f"/v1/demo/prompts/{agent}", headers=op(), json={"prompt": f"Prompt {agent}"})
             self.assertEqual(result.status_code, 200)
-        self.assertEqual(self.client.put("/v1/demo/prompts/other", json={"prompt":"test"}).status_code, 400)
+        self.assertEqual(self.client.put("/v1/demo/prompts/other", headers=op(), json={"prompt":"test"}).status_code, 400)
         secret = {"description":"Secreto artificial", "statuses":["yes", "no"],
                   "absolute":.8, "increase":.3, "allowed_roles":["vendor"]}
-        self.assertEqual(self.client.put("/v1/demo/secrets/artificial", json=secret).status_code, 200)
-        self.assertEqual(self.client.put("/v1/demo/secrets/artificial", json={**secret, "statuses":["no"]}).status_code, 400)
-        self.assertEqual(self.client.put("/v1/demo/secrets/bad-name", json=secret).status_code, 400)
-        self.assertEqual(self.client.put("/v1/demo/vocabulary/paso_intermedio", json={"description":"Paso"}).status_code, 200)
-        self.assertEqual(self.client.put("/v1/demo/vocabulary/artificial", json={"description":"Paso"}).status_code, 400)
+        self.assertEqual(self.client.put("/v1/demo/secrets/artificial", headers=op(), json=secret).status_code, 200)
+        self.assertEqual(self.client.put("/v1/demo/secrets/artificial", headers=op(), json={**secret, "statuses":["no"]}).status_code, 400)
+        self.assertEqual(self.client.put("/v1/demo/secrets/bad-name", headers=op(), json=secret).status_code, 400)
+        self.assertEqual(self.client.put("/v1/demo/vocabulary/paso_intermedio", headers=op(), json={"description":"Paso"}).status_code, 200)
+        self.assertEqual(self.client.put("/v1/demo/vocabulary/artificial", headers=op(), json={"description":"Paso"}).status_code, 400)
         restarted = TestClient(create_app(db=self.path, seed=False))
         current = restarted.get("/v1/demo/config").json()
         self.assertEqual(current["prompts"]["adversary"], "Prompt adversary")
@@ -1924,7 +1932,7 @@ class SemanticApiTests(unittest.TestCase):
                                                                           quote=source.text,p_if_seen=.8)])]
         client = TestClient(create_app(db=self.path, model=Model()))
         payload = {"origin":"flag_source", "at":DAY.isoformat(), "text":"O-17 firmado.", "recipients":["ana"]}
-        self.assertEqual(client.post("/v1/demo/sources/preview", json=payload).status_code, 200)
+        self.assertEqual(client.post("/v1/demo/sources/preview", headers=op(), json=payload).status_code, 200)
         feed = client.get("/v1/demo/events").json()
         self.assertEqual((feed["counts"]["blocked"],feed["counts"]["flagged"]), (0,1))
         self.assertEqual(feed["events"][0]["target_type"], "source")
@@ -1947,9 +1955,9 @@ class SemanticApiTests(unittest.TestCase):
                     "text":"El plazo acaba el viernes."}
             self.assertEqual(self.client.post("/v1/reviews", json=data).json()["status"], "approved")
             if change == "prompt":
-                response = self.client.put("/v1/demo/prompts/analyst", json={"prompt":"Nuevas instrucciones"})
+                response = self.client.put("/v1/demo/prompts/analyst", headers=op(), json={"prompt":"Nuevas instrucciones"})
             else:
-                response = self.client.put("/v1/demo/secrets/nuevo", json={"description":"Dato protegido",
+                response = self.client.put("/v1/demo/secrets/nuevo", headers=op(), json={"description":"Dato protegido",
                     "statuses":["yes"], "absolute":.75, "increase":.45, "allowed_roles":[]})
             self.assertEqual(response.status_code, 200)
             result = self.client.post(f"/v1/reviews/stale-{index}/deliver", json={"user":"ana"}).json()
@@ -1968,19 +1976,19 @@ class SemanticApiTests(unittest.TestCase):
         model = Model()
         client = TestClient(create_app(db=self.path, model=model, seed=False))
         payload = {"origin":"dashboard_source", "at":DAY.isoformat(), "text":"O-17 firmado.", "recipients":["ana"]}
-        preview = client.post("/v1/demo/sources/preview", json=payload)
+        preview = client.post("/v1/demo/sources/preview", headers=op(), json=payload)
         self.assertEqual(preview.status_code, 200)
         self.assertEqual(model.calls, 2)
         self.assertEqual(client.get("/v1/inbox/ana").json()["messages"], [])
         preview_id = preview.json()["preview_id"]
-        result = client.post(f"/v1/demo/sources/{preview_id}/accept")
+        result = client.post(f"/v1/demo/sources/{preview_id}/accept", headers=op())
         self.assertTrue(result.json()["accepted"])
         self.assertEqual(model.calls, 2)
-        self.assertFalse(client.post(f"/v1/demo/sources/{preview_id}/accept").json()["accepted"])
+        self.assertFalse(client.post(f"/v1/demo/sources/{preview_id}/accept", headers=op()).json()["accepted"])
         self.assertEqual(model.calls, 2)
-        stale = client.post("/v1/demo/sources/preview", json={**payload,"origin":"stale_source"}).json()["preview_id"]
-        client.put("/v1/demo/prompts/ontology", json={"prompt":"Cambiado"})
-        self.assertEqual(client.post(f"/v1/demo/sources/{stale}/accept").status_code, 400)
+        stale = client.post("/v1/demo/sources/preview", headers=op(), json={**payload,"origin":"stale_source"}).json()["preview_id"]
+        client.put("/v1/demo/prompts/ontology", headers=op(), json={"prompt":"Cambiado"})
+        self.assertEqual(client.post(f"/v1/demo/sources/{stale}/accept", headers=op()).status_code, 400)
 
     def test_editing_agent_prompts_changes_live_model_instructions(self):
         from fastapi.testclient import TestClient
@@ -1999,8 +2007,8 @@ class SemanticApiTests(unittest.TestCase):
         with mock.patch("isde.claude._request", side_effect=fake), mock.patch("isde.semantic._request", side_effect=fake):
             client = TestClient(create_app(db=self.path, seed=False))
             for agent in ("ontology", "adversary", "analyst"):
-                self.assertEqual(client.put(f"/v1/demo/prompts/{agent}", json={"prompt":f"CUSTOM {agent}"}).status_code, 200)
-            client.post("/v1/demo/sources/preview", json={"origin":"p", "at":DAY.isoformat(),"text":"texto"})
+                self.assertEqual(client.put(f"/v1/demo/prompts/{agent}", headers=op(), json={"prompt":f"CUSTOM {agent}"}).status_code, 200)
+            client.post("/v1/demo/sources/preview", headers=op(), json={"origin":"p", "at":DAY.isoformat(),"text":"texto"})
             data = {**self.data, "task":"freeform", "user":"ana", "text":"El plazo acaba el viernes."}
             self.assertEqual(client.post("/v1/reviews", json=data).status_code, 200)
         for agent in ("ontology", "adversary", "analyst"):
@@ -2012,7 +2020,7 @@ class SemanticApiTests(unittest.TestCase):
         def rewrite(role, context, schema, client, model):
             captured.append(role)
             return Rewrite(text=context["approved_alternative"])
-        self.client.put("/v1/demo/prompts/rewriter", json={"prompt":"CUSTOM rewriter"})
+        self.client.put("/v1/demo/prompts/rewriter", headers=op(), json={"prompt":"CUSTOM rewriter"})
         draft = "El trámite vence el viernes. El expediente O-17 corresponde a BetaAI."
         with mock.patch("isde.workflow._request", side_effect=rewrite):
             result = self.client.post("/v1/messages", json={"user":"luis", "task":"due", "draft":draft,
@@ -2308,3 +2316,18 @@ class RelationGraphTests(unittest.TestCase):
             self.assertEqual(set(response.json()), {"nodes", "edges"})
             self.assertEqual(client.get("/v1/graph?user=nadie",
                                         headers={"X-Mosaic-Operator-Token": "operator"}).status_code, 404)
+
+    def test_demo_write_endpoints_require_operator(self):
+        from fastapi.testclient import TestClient
+        from isde.api import create_app
+        writes = [("put", "/v1/demo/prompts/analyst", {"prompt": "x"}),
+                  ("put", "/v1/demo/secrets/nuevo", {"description": "x", "statuses": ["s"], "absolute": 0.5, "increase": 0.1}),
+                  ("put", "/v1/demo/vocabulary/nuevo", {"description": "x"}),
+                  ("post", "/v1/demo/sources/preview", {"origin": "o", "at": DAY.isoformat(), "text": "t"}),
+                  ("post", "/v1/demo/sources/abc/accept", None)]
+        for env in ({"MOSAIC_OPERATOR_TOKEN": "operator"}, {}):
+            with tempfile.TemporaryDirectory() as folder, mock.patch.dict(os.environ, env, clear=True):
+                client = TestClient(create_app(db=str(Path(folder) / "api.sqlite")))
+                for method, url, body in writes:
+                    for headers in ({}, {"X-Mosaic-Operator-Token": "incorrecto"}):
+                        self.assertEqual(getattr(client, method)(url, json=body, headers=headers).status_code, 403, (env, url))
