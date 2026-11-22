@@ -9,13 +9,13 @@ from pydantic import Field
 from .claude import CANONICAL_IDS, Source, _request, assess_hypotheses, model_id, propose, read_path, retry_invalid
 from .graphs import describe
 from .guard import Guard
-from .model import (Clause, Hypothesis, INTRINSIC_FAMILY, Model, Observation, Option, ProtectedLiteral, Task, Triple,
+from .model import (Clause, Hypothesis, INTRINSIC_FAMILY, Model, ModelTriple, Observation, Option, ProtectedLiteral, Task,
                     VocabularyProposal)
 from .prompts import DEFAULT_PROMPTS
 
 
 class CandidateFact(Model):
-    fact: Triple
+    fact: ModelTriple
     quote: str = Field(min_length=1)
 
 
@@ -221,14 +221,17 @@ def inspect_graph(guard: Guard, model: ClaudeAnalysis):
         visible = guard.recipient_policy(state["user"], state["day"])
         policy = policy.model_copy(update={"vocabulary": {**visible.vocabulary, **policy.vocabulary}})
         analysis = model.analyze(policy, state["text"], state["question"])
-        vocabulary = set()
+        vocabulary, concepts = set(), []
         used = {item.fact[1] for item in analysis.facts}
         for concept in analysis.vocabulary:
-            concept.validate_source(state["text"])
             name = concept.predicate
+            # A redefinition or an unused relation adds nothing, and must not relabel an existing predicate.
             if name in policy.vocabulary or name in policy.families or name in vocabulary or name not in used:
-                raise ValueError("La relación propuesta debe ser nueva y estar vinculada a un hecho")
+                continue
+            concept.validate_source(state["text"])
             vocabulary.add(name)
+            concepts.append(concept)
+        analysis = analysis.model_copy(update={"vocabulary": concepts})
         for item in analysis.facts:
             _, predicate, value = item.fact
             if not item.quote.strip() or item.quote not in state["text"]:

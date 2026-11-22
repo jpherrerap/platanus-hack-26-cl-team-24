@@ -8,7 +8,7 @@ from pydantic import Field, ValidationError, model_validator
 
 from .privacy import rut_format_signals
 from .model import (Entity, Grade, Hypothesis, Id, INTRINSIC_FAMILY, Model, Observation, Policy, Probability,
-                    ProtectedLiteral, RuleProposal, Triple, VocabularyProposal, intrinsic_family)
+                    ModelTriple, ProtectedLiteral, RuleProposal, Triple, VocabularyProposal, intrinsic_family)
 from .prompts import ADVERSARIAL_PROMPT, ENTITY_INSTRUCTION, INTERNAL_ONTOLOGY_PROMPT, PATH_PROMPT, SOURCE_COVERAGE_INSTRUCTION
 
 
@@ -227,7 +227,7 @@ def _api_error(exc, model):
 
 
 class SuggestedFact(Model):
-    fact: Triple
+    fact: ModelTriple
     quote: str = Field(min_length=1)
     confidence: Probability
 
@@ -308,10 +308,12 @@ def assess_hypotheses(policy, text, graph_context, *, client=None, model=None, p
     )
 
     def ask(correction):
-        result = _request(role + correction, context, Interpretations, client, model)
-        for h in result.hypotheses:
+        hypotheses = _request(role + correction, context, Interpretations, client, model).hypotheses
+        if correction:
+            hypotheses = [h.fit(policy) for h in hypotheses]
+        for h in hypotheses:
             h.validate_source(policy, text)
-        return result.hypotheses
+        return hypotheses
     return retry_invalid(ask)
 
 
@@ -396,6 +398,10 @@ def propose(policy: Policy, source: Source, grade: Grade | None = None, *, graph
             incomplete = (not result.covers_all_claims or bool(result.unrepresented_claims) or
                           (empty and result.has_factual_claims) or (not empty and not result.has_factual_claims))
         else:
+            # Intrinsic sensitivity is a judgment, not an explicit fact, so it always travels as a hypothesis.
+            result.hypotheses = result.hypotheses + [Hypothesis(claim=item.fact, quote=item.quote, p_if_seen=item.confidence)
+                                                       for item in result.items if item.fact[1] == INTRINSIC_FAMILY]
+            result.items = [item for item in result.items if item.fact[1] != INTRINSIC_FAMILY]
             quotes += [p.quote for p in result.hypotheses]
             defined = set(policy.vocabulary) | set(policy.families)
             missing = {item.fact[1] for item in result.items if item.fact[1] not in defined}
@@ -446,8 +452,11 @@ def propose(policy: Policy, source: Source, grade: Grade | None = None, *, graph
             result.vocabulary.extend(completion.vocabulary)
             missing = set()
         if missing:
-            raise ValueError("El modelo usó predicados sin definir: " + ", ".join(sorted(missing)) +
-                             ". La propuesta sigue incompleta después del reintento; no se incorporó al grafo.")
+            # The observer can't define predicates; after the retry an undefined relation keeps its risk as intrinsic.
+            result.hypotheses = result.hypotheses + [Hypothesis(claim=item.fact, quote=item.quote, p_if_seen=item.confidence)
+                                                       for item in result.items if item.fact[1] in missing]
+            result.items = [item for item in result.items if item.fact[1] not in missing]
+            result.hypotheses = [h.fit(policy) for h in result.hypotheses]
         break
     vocabulary = []
     effective = policy
@@ -462,8 +471,8 @@ def propose(policy: Policy, source: Source, grade: Grade | None = None, *, graph
                 vocabulary.append(proposal)
         used = {item.fact[1] for item in result.items}
         used.update(atom[1] for rule in result.rules for atom in [*rule.rule.when, rule.rule.then])
-        if any(proposal.predicate not in used for proposal in vocabulary):
-            raise ValueError("Un concepto propuesto no está vinculado a ningún hecho o regla")
+        # An unused definition adds nothing to the graph; drop it like a redefinition instead of failing the source.
+        vocabulary = [proposal for proposal in vocabulary if proposal.predicate in used]
         effective = policy.model_copy(update={"vocabulary": {**policy.vocabulary,
                                       **{p.predicate: p.description for p in vocabulary}}})
     events = []

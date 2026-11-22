@@ -1,14 +1,27 @@
 """Trusted policy and input contracts. Identifiers never contain executable rules."""
+import unicodedata
 from datetime import date
 from pathlib import Path
 from typing import Annotated, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 Id = Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]{0,95}$")]
 Probability = Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
 Triple = tuple[Id, Id, Id]
+
+
+def fold_ids(value):
+    """Claude writes Spanish identifiers with accents or capitals; fold them to the canonical ASCII form."""
+    if not isinstance(value, (list, tuple)):
+        return value
+    return [unicodedata.normalize("NFKD", v).encode("ascii", "ignore").decode().lower() if isinstance(v, str) else v
+            for v in value]
+
+
+# Only for triples proposed by the model; quotes stay literal and trusted inputs keep strict identifiers.
+ModelTriple = Annotated[Triple, BeforeValidator(fold_ids)]
 RuleTerm = Annotated[str, Field(pattern=r"^(?:[a-z][a-z0-9_]{0,95}|\?[a-z][a-z0-9_]{0,95})$")]
 RuleAtom = tuple[RuleTerm, Id, RuleTerm]
 Grade = Literal["possible_access", "external_hint", "delivered", "read", "cited"]
@@ -222,9 +235,21 @@ class Case(Scope):
 
 
 class Hypothesis(Model):
-    claim: Triple
+    claim: ModelTriple
     quote: str = Field(min_length=1)
     p_if_seen: Probability
+
+    @field_validator("claim")
+    @classmethod
+    def intrinsic_subject(cls, claim):
+        # Models often put the reserved family first; no node may carry that name, so the swap is unambiguous.
+        return (claim[1], INTRINSIC_FAMILY, claim[2]) if claim[0] == INTRINSIC_FAMILY else claim
+
+    def fit(self, policy):
+        """Model output can't extend the vocabulary here; an undefined relation keeps its risk as intrinsic sensitivity."""
+        if self.claim[1] in policy.vocabulary or self.claim[1] in policy.families:
+            return self
+        return self.model_copy(update={"claim": (self.claim[0], INTRINSIC_FAMILY, self.claim[2])})
 
     def validate_source(self, policy, text):
         _, predicate, value = self.claim

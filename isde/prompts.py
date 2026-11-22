@@ -65,6 +65,10 @@ afirmaciones, devuelve has_factual_claims false y listas vacías. No confundas
 no poder representar una afirmación con que no exista: usa covers_all_claims false
 y unrepresented_claims, con quote literal y reason, si queda contenido relevante
 sin representar. No devuelvas una extracción vacía como si fuera completa.
+Una indicación de lo que se puede publicar o compartir, como "el informe puede
+decir que X" o "X puede compartirse", no es una posibilidad incierta: registra X
+como hecho con su cita literal y no la incluyas en unrepresented_claims. No
+conviertas esa indicación en permisos.
 
 En protected_literals, registra los valores literales que la fuente identifica
 como confidenciales, por ejemplo el valor completo de una credencial privada.
