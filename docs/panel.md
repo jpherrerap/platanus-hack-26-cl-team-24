@@ -10,7 +10,7 @@ python -m uvicorn isde.api:create_app --factory --host 127.0.0.1 --port 8001
 
 Abre http://127.0.0.1:8001/. En vez del llavero también puedes configurar `ANTHROPIC_API_KEY` en el entorno. Las llamadas para analizar fuentes o respuestas usan Claude y pueden tener costo. El panel es para una integración de confianza en un proceso local: no lo publiques en red sin autenticación y control de acceso.
 
-La configuración inicial del panel usa `mvp-policy.yaml`, `mvp-case.yaml` y `mvp-history.yaml`: no tiene secretos de un caso empresarial predefinido y contiene dos destinatarios ficticios, `usuario_demo` y `revisor_demo`. Los destinatarios y roles se definen en YAML; el panel aún no crea ni autentica usuarios reales.
+La configuración inicial del panel usa `mvp-policy.yaml`, `mvp-case.yaml` y `mvp-history.yaml`: no tiene secretos de un caso empresarial predefinido y contiene dos destinatarios ficticios, `usuario_demo` y `revisor_demo`. `mvp-history.yaml` precarga la ontología de los tres escenarios de «Simulación» (correo, código e informe), generada con Claude al analizar e incorporar cada ejemplo; así se puede evaluar la salida de un ejemplo sin analizar antes su fuente. Los destinatarios y roles se definen en YAML; el panel aún no crea ni autentica usuarios reales.
 
 ## Pestañas
 

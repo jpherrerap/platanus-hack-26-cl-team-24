@@ -1,1 +1,125 @@
-observations: []
+# Ontología precargada de los escenarios de la simulación del panel (correo, código, informe).
+# Generada con Claude al analizar e incorporar cada ejemplo ficticio; se siembra al iniciar la API.
+observations:
+- origin: simulacion_correo
+  entities:
+  - id: alba
+    type: persona
+    label: Alba
+  assessor: claude-haiku-4-5-20251001
+  at: '2026-11-22'
+- origin: simulacion_correo
+  vocabulary:
+  - predicate: domicilio
+    description: Dirección residencial o ubicación física de una persona
+    quote: mi dirección es Avenida de Ejemplo 123
+    confidence: 0.95
+  assessor: claude-haiku-4-5-20251001
+  at: '2026-11-22'
+  quote: 'La persona ficticia Alba escribe: mi dirección es Avenida de Ejemplo 123. Es información privada.'
+- origin: simulacion_correo
+  protected_literals:
+  - value: Avenida de Ejemplo 123
+    quote: mi dirección es Avenida de Ejemplo 123. Es información privada.
+  assessor: claude-haiku-4-5-20251001
+  at: '2026-11-22'
+  quote: 'La persona ficticia Alba escribe: mi dirección es Avenida de Ejemplo 123. Es información privada.'
+- origin: simulacion_correo
+  facts:
+  - - alba
+    - domicilio
+    - avenida_de_ejemplo_123
+  at: '2026-11-22'
+  quote: mi dirección es Avenida de Ejemplo 123
+- origin: simulacion_codigo
+  entities:
+  - id: token_interno
+    type: dato
+    label: TOKEN_INTERNO
+  assessor: claude-haiku-4-5-20251001
+  at: '2026-11-22'
+- origin: simulacion_codigo
+  vocabulary:
+  - predicate: es_credencial_privada
+    description: Indica que un dato es una credencial privada que debe mantenerse confidencial
+    quote: Se usa como credencial privada
+    confidence: 0.98
+  - predicate: restriction_divulgacion
+    description: Restricción explícita sobre la divulgación o publicación de un dato
+    quote: no debe publicarse
+    confidence: 0.98
+  assessor: claude-haiku-4-5-20251001
+  at: '2026-11-22'
+  quote: En un proyecto ficticio, la variable TOKEN_INTERNO contiene DEMO_TOKEN_NO_VALIDO_123. Se usa como credencial privada;
+    no debe publicarse.
+- origin: simulacion_codigo
+  facts:
+  - - token_interno
+    - es_credencial_privada
+    - verdadero
+  at: '2026-11-22'
+  quote: Se usa como credencial privada; no debe publicarse.
+- origin: simulacion_codigo
+  facts:
+  - - token_interno
+    - restriction_divulgacion
+    - no_publicar
+  at: '2026-11-22'
+  quote: no debe publicarse
+- origin: simulacion_codigo
+  protected_literals:
+  - value: DEMO_TOKEN_NO_VALIDO_123
+    quote: DEMO_TOKEN_NO_VALIDO_123
+  at: '2026-11-22'
+  quote: En un proyecto ficticio, la variable TOKEN_INTERNO contiene DEMO_TOKEN_NO_VALIDO_123. Se usa como credencial privada;
+    no debe publicarse.
+- origin: simulacion_informe
+  entities:
+  - id: alba
+    type: persona
+    label: Alba
+  assessor: claude-haiku-4-5-20251001
+  at: '2026-11-22'
+- origin: simulacion_informe
+  vocabulary:
+  - predicate: puede_compartirse
+    description: Indica que un dato o resultado de un evento puede ser compartido o divulgado según lo reportado
+    quote: puede compartirse
+    confidence: 0.88
+  - predicate: type_evento
+    description: Clasificación o tipo de un evento según su naturaleza o propósito
+    quote: La revisión del equipo terminó el viernes
+    confidence: 0.9
+  assessor: claude-haiku-4-5-20251001
+  at: '2026-11-22'
+  quote: 'Documento ficticio de personal: Alba tiene un diagnóstico médico reservado. La revisión del equipo terminó el viernes
+    y puede compartirse.'
+- origin: simulacion_informe
+  protected_literals:
+  - value: diagnóstico médico
+    quote: Alba tiene un diagnóstico médico reservado
+  assessor: claude-haiku-4-5-20251001
+  at: '2026-11-22'
+  quote: 'Documento ficticio de personal: Alba tiene un diagnóstico médico reservado. La revisión del equipo terminó el viernes
+    y puede compartirse.'
+- origin: simulacion_informe
+  facts:
+  - - alba
+    - restriction_divulgacion
+    - no_compartir_sin_autorizacion
+  at: '2026-11-22'
+  quote: Alba tiene un diagnóstico médico reservado
+- origin: simulacion_informe
+  facts:
+  - - alba_medical_review
+    - type_evento
+    - revision_medica
+  at: '2026-11-22'
+  quote: La revisión del equipo terminó el viernes
+- origin: simulacion_informe
+  facts:
+  - - alba_medical_review
+    - puede_compartirse
+    - verdadero
+  at: '2026-11-22'
+  quote: puede compartirse

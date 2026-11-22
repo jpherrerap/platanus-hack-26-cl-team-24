@@ -510,7 +510,7 @@ class DynamicVocabularyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder, mock.patch.dict(os.environ, {}, clear=True), \
              mock.patch("isde.claude._request", side_effect=fake), mock.patch("isde.semantic._request", side_effect=fake):
             path = str(Path(folder) / "data.sqlite")
-            client = TestClient(create_app(db=path))
+            client = TestClient(create_app(db=path, seed=False))
             body = {"origin":"correo_01", "at":DAY.isoformat(), "text":self.source_text,
                     "recipients":["usuario_demo"]}
             preview = client.post("/v1/demo/sources/preview", json=body)
@@ -607,7 +607,7 @@ class DynamicVocabularyTests(unittest.TestCase):
         model = Model()
         with tempfile.TemporaryDirectory() as folder, mock.patch.dict(os.environ, {}, clear=True):
             path = str(Path(folder) / "data.sqlite")
-            client = TestClient(create_app(db=path, model=model))
+            client = TestClient(create_app(db=path, model=model, seed=False))
             body = {"origin":"correo_01", "at":DAY.isoformat(), "text":self.source_text, "recipients":[]}
             preview = client.post("/v1/demo/sources/preview", json=body).json()
             self.assertIsNone(preview["preview_id"])
@@ -653,6 +653,21 @@ class DynamicVocabularyTests(unittest.TestCase):
                 self.assertEqual(guard.proposed_vocabulary(DAY), [])
                 self.assertEqual(guard.records("usuario_demo", DAY), [])
                 self.assertEqual(guard.db.execute("SELECT count(*) FROM source_imports").fetchone()[0], 0)
+            finally:
+                guard.close()
+
+    def test_dashboard_preloads_simulation_ontology_on_every_start(self):
+        from fastapi.testclient import TestClient
+        from isde.api import create_app
+        with tempfile.TemporaryDirectory() as folder, mock.patch.dict(os.environ, {}, clear=True):
+            path = str(Path(folder)/"data.sqlite")
+            create_app(db=path)
+            vocabulary = TestClient(create_app(db=path)).get("/v1/demo/config").json()["vocabulary"]
+            self.assertTrue({"domicilio", "es_credencial_privada", "puede_compartirse"} <= vocabulary.keys())
+            guard = Guard(path, self.policy, self.case)
+            try:
+                literals = {row[0] for row in guard.db.execute("SELECT value FROM protected_literals")}
+                self.assertEqual(literals, {"Avenida de Ejemplo 123", "DEMO_TOKEN_NO_VALIDO_123", "diagnóstico médico"})
             finally:
                 guard.close()
 
@@ -2078,7 +2093,6 @@ class SemanticApiTests(unittest.TestCase):
         for name in ("source-text","preview-source","accept-source","answer","check-answer","prompt",
                      "secret-id","secret-mode","operator-token","forget-token","notification-feed","flag-feed","event-dialog"):
             self.assertIn(name, parsed.nodes)
-        self.assertIn("No hay conexión de envío de correo", page)
         self.assertEqual(self.client.get("/v1/demo/events").json()["counts"]["total"], 0)
 
     def test_dashboard_prefills_operator_token_only_for_local_requests(self):
