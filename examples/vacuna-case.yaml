@@ -1,5 +1,5 @@
 # Caso por defecto más el directorio de la intranet de AlphaCorp (INTRANET_SEED=vacuna).
-# Usa la política y el historial por defecto, que ya traen la ontología de la vacuna VX-Aurora.
+# Usa la política por defecto. Con MOSAIC_HISTORY=examples/vacuna-history.yaml, mosAIc sabe además qué correos recibió Luis.
 org: organizacion_demo
 operation: operacion_demo
 assignments:
