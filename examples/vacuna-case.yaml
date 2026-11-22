@@ -9,5 +9,6 @@ assignments:
   - {user: luis, role: usuario, org: organizacion_demo, operation: operacion_demo, start: 2000-01-01}
   - {user: ines, role: usuario, org: organizacion_demo, operation: operacion_demo, start: 2000-01-01}
   - {user: sofia, role: revisor, org: organizacion_demo, operation: operacion_demo, start: 2000-01-01}
+names: {ana: Ana, luis: Luis, ines: Inés, sofia: Sofía}
 clauses: {}
 tasks: {}

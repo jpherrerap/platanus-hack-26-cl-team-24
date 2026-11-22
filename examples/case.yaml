@@ -5,6 +5,7 @@ assignments:
   - {user: luis, role: vendor, org: alphacorp, operation: atlas, start: 2026-01-01}
   - {user: sofia, role: senior_legal, org: alphacorp, operation: atlas, start: 2026-01-01}
   - {user: ines, role: procurement, org: alphacorp, operation: atlas, start: 2026-01-01}
+names: {ana: Ana, luis: Luis, ines: Inés, sofia: Sofía}
 clauses:
   deadline:
     text: El trámite vence el viernes.

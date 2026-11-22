@@ -38,10 +38,10 @@ Cada turno muestra primero el borrador que propone el agente. Las respuestas per
 
 Las cuatro piden la tarea «due» (¿cuándo vence el trámite?) y el agente propone: «El trámite vence el viernes. El expediente O-17 corresponde a BetaAI.» Señala:
 
-- **ana** (`vendor`, «no tiene pistas previas»): `PERMITIR`. No tiene la otra pieza.
-- **luis**, el único bloque completo del turno: «ya pudo saber (98%): o17 · signature = signed», porque citó el acta. `P(betaai · offer_status = signed) 0% → 74%` y `RETENIDO: sube al menos +45%`. La alternativa 2 no aumenta nada, así que `REPARAR`: su bandeja recibe solo «El trámite vence el viernes.». La tarea sigue respondida.
-- **sofia** (`legal, senior_legal`): «su rol puede recibir: offer_status», así que `PERMITIR`.
-- **ines** (`procurement`, solo pudo consultar el acta, 15%): `0% → 11%`, «bajo el umbral (75% o +45%)», así que `PERMITIR`.
+- **Ana** (`vendor`, «no tiene pistas previas»): `PERMITIR`. No tiene la otra pieza.
+- **Luis**, el único bloque completo del turno: «ya pudo saber (98%): o17 · signature = signed», porque citó el acta. `P(betaai · offer_status = signed) 0% → 74%` y `RETENIDO: sube al menos +45%`. La alternativa 2 no aumenta nada, así que `REPARAR`: su bandeja recibe solo «El trámite vence el viernes.». La tarea sigue respondida.
+- **Sofía** (`legal, senior_legal`): «su rol puede recibir: offer_status», así que `PERMITIR`.
+- **Inés** (`procurement`, solo pudo consultar el acta, 15%): `0% → 11%`, «bajo el umbral (75% o +45%)», así que `PERMITIR`.
 
 Frase: «Mismo texto, cuatro decisiones. Depende de quién lo recibe y qué ya sabe».
 
@@ -49,8 +49,8 @@ Frase: «Mismo texto, cuatro decisiones. Depende de quién lo recibe y qué ya s
 
 Ahora Ana y Luis piden la tarea «record» y el agente propone «El expediente O-17 ya está firmado.». Señala:
 
-- **ana**, bloque completo: el contexto ahora incluye «ya pudo saber (75%): o17 · counterparty = betaai», que es lo que mosAIc le entregó en el turno 1 (75% es el peso de «entregado»). Con eso, `0% → 56%`, `RETENIDO`, y como la tarea no tiene otra alternativa: `REVISIÓN HUMANA · no hay alternativa segura; no se entrega nada`. Su bandeja dice «(sin cambios)»: solo tiene el mensaje del turno 1.
-- **luis**: ya sabía que O-17 está firmado y nunca recibió la contraparte, así que `PERMITIR`.
+- **Ana**, bloque completo: el contexto ahora incluye «ya pudo saber (75%): o17 · counterparty = betaai», que es lo que mosAIc le entregó en el turno 1 (75% es el peso de «entregado»). Con eso, `0% → 56%`, `RETENIDO`, y como la tarea no tiene otra alternativa: `REVISIÓN HUMANA · no hay alternativa segura; no se entrega nada`. Su bandeja dice «(sin cambios)»: solo tiene el mensaje del turno 1.
+- **Luis**: ya sabía que O-17 está firmado y nunca recibió la contraparte, así que `PERMITIR`.
 
 Frase: «Un guardrail que mira una respuesta a la vez habría dejado pasar las dos».
 
@@ -58,9 +58,9 @@ El `Resumen` final repite las seis decisiones, una línea por turno.
 
 Opcional, si hay tiempo o piden verlo gráfico: `python -m isde serve` y abrir http://127.0.0.1:8000/?user=ana. «Evaluar» es vista previa. «Entregar» confirma la entrega en memoria y la suma al historial. «Reiniciar» vuelve al historial de ejemplo. Recorrido:
 
-1. **ana**, tarea `due`: `Permitir`. Pulsa «Entregar»: la bandeja de Ana muestra el mensaje.
+1. **Ana**, tarea `due`: `Permitir`. Pulsa «Entregar»: la bandeja de Ana muestra el mensaje.
 2. Cambia la tarea a `record`: el contexto ya incluye `o17 · counterparty · betaai`, la barra sube de 0 % a 56,3 % y la decisión es `Revisión humana`.
-3. Cambia a **luis**: `Permitir`.
+3. Cambia a **Luis**: `Permitir`.
 4. «Reiniciar» antes de volver a mostrarlo.
 
 ## 4. Límites honestos (30 s)

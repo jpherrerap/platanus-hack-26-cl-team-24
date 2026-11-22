@@ -262,6 +262,10 @@ class Case(Scope):
     assignments: list[Assignment]
     clauses: dict[Id, Clause]
     tasks: dict[Id, Task]
+    names: dict[Id, str] = {}  # Display names; ids stay ASCII.
+
+    def name(self, user):
+        return self.names.get(user, user)
 
     @model_validator(mode="after")
     def option_references(self):

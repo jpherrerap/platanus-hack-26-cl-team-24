@@ -71,10 +71,11 @@ async function evaluate(keepDraft, deliver) {{
   const data = await r.json();
   $("error").textContent = r.ok ? "" : data.error;
   if (!r.ok) return;
+  const who = [...$("user").options].find(o => o.value === data.user)?.text ?? data.user;
   $("status").textContent = !deliver ? "Vista previa: no se entregó nada."
-    : data.delivered ? `Entregado a ${{data.user}}. Desde ahora cuenta en su historial.`
-    : `Retenido para revisión humana: no se entregó nada a ${{data.user}}.`;
-  $("r-inbox-title").textContent = `Bandeja de ${{data.user}} (entregas confirmadas)`;
+    : data.delivered ? `Entregado a ${{who}}. Desde ahora cuenta en su historial.`
+    : `Retenido para revisión humana: no se entregó nada a ${{who}}.`;
+  $("r-inbox-title").textContent = `Bandeja de ${{who}} (entregas confirmadas)`;
   const inbox = $("r-inbox"); inbox.replaceChildren();
   data.inbox.forEach(m => inbox.append(el("li", m.text)));
   if (!data.inbox.length) inbox.append(el("li", "Vacía.", "empty"));
@@ -181,7 +182,7 @@ def respond(state: dict, method: str, path: str, headers=None, body: bytes = b""
         nonce = secrets.token_urlsafe(16)
         users = dict.fromkeys(a.user for a in guard.case.assignments)
         page = PAGE.format(nonce=nonce, day=DAY.isoformat(), max_draft=MAX_DRAFT,
-                           users="".join(f'<option value="{escape(u)}">{escape(u)}</option>' for u in users),
+                           users="".join(f'<option value="{escape(u)}">{escape(guard.case.name(u))}</option>' for u in users),
                            tasks="".join(f'<option value="{escape(t)}">{escape(t)}</option>' for t in guard.case.tasks))
         return 200, "text/html; charset=utf-8", page, nonce
     try:
