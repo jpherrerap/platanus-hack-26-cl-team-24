@@ -2,5 +2,5 @@
   "project-name": "mosAIc",
   "project-oneliner-spanish": "Evita que una respuesta de un agente revele un secreto al combinarse con pistas previas.",
   "project-description-spanish": "Dos piezas de información por sí solas pueden ser inofensivas, pero juntas pueden permitir que un atacante infiera información altamente sensible. mosAIc ayuda a las empresas a evitar que sus agentes de IA revelen información confidencial de forma indirecta. Antes de responder, evalúa qué podría deducir cada destinatario a partir de la respuesta, su rol y la información previa a la que pudo haber tenido acceso.",
-  "deploy-url": "https://github.com/platanus-hack/platanus-hack-26-cl-team-24/archive/refs/heads/main.zip"
+  "deploy-url": "https://mosaic-7uf1.onrender.com"
 }
