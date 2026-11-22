@@ -16,11 +16,12 @@ Triple = tuple[Id, Id, Id]
 def fold_id(value):
     """Claude writes identifiers with accents, capitals or leading digits; fold them to the canonical form.
 
-    Other characters stay and fail validation: folding never invents separators (O-18 is not o_18)."""
+    A name keeps its other characters and fails validation (O-18 is not o_18). A number's punctuation becomes
+    underscores, so 1.500 and 1,500 are the same value, and ½ stays apart from 12."""
     if not isinstance(value, str):
         return value
-    folded = unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode().lower()
-    number = folded.lstrip("$€£ ")
+    folded = unicodedata.normalize("NFKD", value).replace("\u2044", "/").encode("ascii", "ignore").decode().lower()
+    number = folded.lstrip("$ ")
     if number[:1].isdigit():
         # Amounts, percentages and dates are values; their punctuation carries no identity, unlike O-18.
         number = re.sub(r"[^a-z0-9]+", "_", number.replace("%", "_pct")).strip("_")

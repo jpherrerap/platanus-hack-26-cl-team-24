@@ -724,11 +724,14 @@ class DynamicVocabularyTests(unittest.TestCase):
                 self.assertEqual(reason("Obo es un fármaco."), "confidential_node")
                 self.assertEqual(reason("Obo se está trabajando."), "confidential_node")
                 self.assertEqual(reason("La dirección de Alba es Avenida de Ejemplo 123."), "confidential_node")
-                self.assertEqual(reason("Hay un fármaco nuevo que sale el próximo trimestre."), "confidential_pattern")
-                self.assertEqual(reason("Reclutamos voluntarios para la fase III de una vacuna."), "confidential_pattern")
+                self.assertEqual(reason("El estudio ya tiene 4.800 voluntarios."), "confidential_node")
+                # Generic internal values never block by themselves; the adversarial analyst judges paraphrases.
                 for benign in ("No tenemos anuncios de productos por ahora.", "La revisión del equipo terminó el viernes.",
-                               "Biovacunas del Sur vende vacunas en Chile."):
-                    self.assertNotIn(reason(benign), {"confidential_node", "confidential_pattern"}, benign)
+                               "Biovacunas del Sur vende vacunas en Chile.",
+                               "La campaña de vacuna contra la influenza sigue en curso.",
+                               "Publicaremos el informe anual 2024 el próximo trimestre.",
+                               "Un ensayo clínico en fase III siempre es largo."):
+                    self.assertNotEqual(reason(benign), "confidential_node", benign)
             finally:
                 guard.close()
 
@@ -837,6 +840,47 @@ class ConfidentialityTests(unittest.TestCase):
         self.guard.observe(events)
         self.assertEqual(set(self.guard.confidential_nodes()), {"hunter2"})
 
+    def test_a_secret_that_holds_a_protected_value_keeps_its_level(self):
+        text = "El proyecto secreto Obo tiene presupuesto 5M_USD. Obo es secreto."
+        payload = {"vocabulary":[{"predicate":"presupuesto", "description":"Monto asignado", "quote":"presupuesto 5M_USD",
+                                  "confidence":.9}],
+                   "items":[{"fact":["obo", "presupuesto", "v_5m_usd"], "quote":"presupuesto 5M_USD", "confidence":.9},
+                            {"fact":["obo", "nivel", "secreto"], "quote":"Obo es secreto", "confidence":.9}],
+                   "protected_literals":[{"value":"5M_USD", "quote":"presupuesto 5M_USD"}],
+                   "entities":[{"id":"obo", "type":"dato", "label":"Obo", "confidentiality":"restringido"},
+                               {"id":"v_5m_usd", "type":"valor", "label":"5M_USD", "confidentiality":"restringido"}]}
+        client, _ = self.client(payload)
+        events = propose(self.policy, Source(origin="obo", at=DAY, text=text), client=client)
+        self.assertEqual({e.id: e.confidentiality for ev in events for e in ev.entities},
+                         {"obo": "restringido", "v_5m_usd": "restringido"})
+
+    def test_short_protected_values_and_partial_words_never_spread(self):
+        text = "La reunión de directorio es pública; la clave es de."
+        payload = {"items":[], "protected_literals":[{"value":"de", "quote":"la clave es de"}],
+                   "entities":[{"id":"reunion", "type":"evento", "label":"reunión de directorio",
+                                "confidentiality":"publico"}]}
+        client, _ = self.client(payload)
+        events = propose(self.policy, Source(origin="corto", at=DAY, text=text), client=client)
+        self.assertEqual([l for e in events for l in e.protected_literals], [])
+        self.guard.observe(events)
+        # An operator-declared secret elsewhere only raises a node whose label names it as whole words.
+        self.guard.observe([Observation(origin="op", at=DAY, quote="Estado 12", protected_literals=[
+            {"value":"Estado 12", "quote":"Estado 12"}])])
+        self.guard.observe([Observation(origin="w", at=DAY, entities=[
+            Entity(id="banco", type="dato", label="Banco Estado 123", confidentiality="interno")])])
+        levels = dict(self.guard.db.execute("SELECT id,confidentiality FROM kg_nodes"))
+        self.assertEqual((levels["reunion"], levels["banco"]), ("publico", "interno"))
+
+    def test_merged_calls_count_any_claim_and_parse_json_text(self):
+        from isde.claude import merge_calls
+        merged = merge_calls([{"items":[], "has_factual_claims":True, "covers_all_claims":True},
+                              {"items":[], "has_factual_claims":False, "covers_all_claims":True,
+                               "protected_literals":json.dumps([{"value":"hunter2", "quote":"hunter2"}])}])
+        self.assertEqual((merged["has_factual_claims"], merged["covers_all_claims"]), (True, True))
+        self.assertEqual(merged["protected_literals"], [{"value":"hunter2", "quote":"hunter2"}])
+        with self.assertRaisesRegex(ValueError, "formato inválido"):
+            merge_calls([{"items":[]}, {"items":{"no":"lista"}}])
+
     def test_selection_split_across_tool_calls_is_merged_fail_closed(self):
         first = {"vocabulary":[self.concept], "items":[self.link], "covers_all_claims":True,
                  "entities":[{"id":"hunter2", "type":"dato", "label":"hunter2", "confidentiality":"restringido"}]}
@@ -871,6 +915,8 @@ class ConfidentialityTests(unittest.TestCase):
                       "quote":"q", "confidence":.5}],
             "unrepresented_claims":[{"quote":"q", "reason":"x" * 900}]})
         self.assertEqual(result.items[0].fact, ("lanzamiento", "fecha", "v_2024_06_03"))
+        from isde.model import fold_id
+        self.assertEqual([fold_id(v) for v in ("½", "12", "1.500", "1,500", "O-18")], ["v_1_2", "v_12", "v_1_500", "v_1_500", "o-18"])
         self.assertEqual((result.entities[0].type, result.entities[0].aliases), ("entidad", ["v_420_000_000"]))
         self.assertEqual(result.rules[0].rule.when[0], ("?x", "es_publico", "v_2024_04_30"))
         self.assertEqual(len(result.unrepresented_claims[0].reason), 500)

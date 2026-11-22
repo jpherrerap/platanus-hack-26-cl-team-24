@@ -185,9 +185,8 @@ class Guard:
                 "SELECT DISTINCT value FROM protected_literals WHERE org=? AND op=?", self.scope)}
             for event in observations:
                 for entity in event.entities:
-                    # The node must name the whole secret; "Banco" is not the secret "Banco Estado 1234".
-                    if any(" ".join(value.split()).casefold() in " ".join(entity.label.split()).casefold()
-                           for value in secrets if value.strip()):
+                    # The node must name the whole secret as words; "Banco" is not "Banco Estado 1234", "de" is no secret.
+                    if any(len(value.strip()) >= 4 and mentions(value, entity.label) for value in secrets):
                         entity = entity.model_copy(update={"confidentiality": "restringido"})
                     self._register(entity, resolve)
             for event in sorted(observations, key=lambda event: not bool(event.vocabulary)):
@@ -309,31 +308,6 @@ class Guard:
         names = {node: (node, label) for node, label in nodes.items()}
         return names | {alias: names[node] for alias, node in self.db.execute(
             "SELECT alias,id FROM kg_aliases WHERE org=? AND op=?", self.scope) if node in nodes}
-
-    def fingerprints(self, at, confidential):
-        """Non-public neighbours of each group of linked confidential nodes, with the label a draft could quote.
-
-        A secret spread over linked nodes (a vaccine and its trial) shares one fingerprint."""
-        stored = {node: (label, level) for node, label, level in self.db.execute(
-            "SELECT id,label,confidentiality FROM kg_nodes WHERE org=? AND op=?", self.scope)}
-        nodes = {node for node, _ in confidential.values()}
-        facts = [fact for _, fact, _ in self.records("", at)]
-        group = {node: node for node in nodes}
-
-        def root(node):
-            while group[node] != node:
-                node = group[node]
-            return node
-        for subject, _, value in facts:
-            if subject in nodes and value in nodes:
-                group[root(subject)] = root(value)
-        result = defaultdict(dict)
-        for subject, _, value in facts:
-            for node, other in ((subject, value), (value, subject)):
-                label, level = stored.get(other, (None, None))
-                if node in nodes and other not in nodes and level != "publico":
-                    result[root(node)][other] = label
-        return result
 
     def path_ratings(self):
         return dict(self.db.execute("SELECT signature,confidence FROM path_ratings WHERE org=? AND op=?", self.scope))
@@ -488,7 +462,6 @@ class Guard:
         _, allowed = user_grants(self.policy, role_graph(self.schema, self.case, at), user)
         restricted_literals = self.restricted_literals(user, at)
         confidential = self.confidential_nodes()
-        fingerprints = self.fingerprints(at, confidential)
         attempts = []
         options = list(task.options)
         if draft is not None:
@@ -515,18 +488,11 @@ class Guard:
                 attempts.append({"reason": "protected_literal"})
                 continue
             # A confidential datum is restricted for everyone, like an intrinsic secret: no role receives it.
-            terms = {term for fact in facts for term in (fact[0], fact[2])}
-            named = {confidential[term][0] for term in terms if term in confidential}
+            named = {confidential[term][0] for fact in facts for term in (fact[0], fact[2]) if term in confidential}
             # The text check covers a draft whose extracted facts missed the node.
             named |= {node for node, label in confidential.values() if mentions(label, text)}
             if named:
                 attempts.append({"reason": "confidential_node", "nodes": sorted(named)})
-                continue
-            # Two non-public traits of a secret reveal it without its name: "un fármaco que sale el próximo trimestre".
-            traced = sorted(node for node, traits in fingerprints.items()
-                            if len({t for t, label in traits.items() if t in terms or mentions(label, text)}) >= 2)
-            if traced:
-                attempts.append({"reason": "confidential_pattern", "nodes": traced})
                 continue
             privacy_reason = rut_protection.reason(text, facts)
             if privacy_reason:

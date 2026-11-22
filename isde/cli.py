@@ -14,8 +14,7 @@ ACTIONS = {"allow": ("PERMITIR", "32"), "repair": ("REPARAR", "33"), "review": (
 REASONS = {"unmapped_draft": "no coincide con ninguna respuesta del catálogo",
            "incomplete_task": "la alternativa no completa la tarea",
            "unverified_content": "contiene hechos sin respaldo en el grafo interno",
-           "confidential_node": "nombra un dato confidencial del grafo interno",
-           "confidential_pattern": "reúne rasgos de un dato confidencial sin nombrarlo"}
+           "confidential_node": "nombra un dato confidencial del grafo interno"}
 # Installed wheels carry the examples as isde/examples; a source checkout keeps them at the repo root.
 HERE = Path(__file__).resolve().parent
 EXAMPLES = HERE / "examples" if (HERE / "examples").is_dir() else HERE.parent / "examples"

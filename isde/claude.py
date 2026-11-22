@@ -190,17 +190,35 @@ def _request(role, context, schema, client, model, media=None):
         raise ValueError("Claude devolvió una selección con formato inválido") from exc
 
 
+def parse_json_lists(data):
+    """Haiku sometimes sends a list field as its JSON text; the content is still validated field by field."""
+    if not isinstance(data, dict):
+        return data
+    parsed = {}
+    for key, value in data.items():
+        if isinstance(value, str) and value.lstrip().startswith("["):
+            try:
+                # raw_decode tolerates trailing prose after the list.
+                value = json.JSONDecoder().raw_decode(value.lstrip())[0]
+            except ValueError:
+                pass
+        parsed[key] = value
+    return parsed
+
+
 def merge_calls(inputs):
-    """Join a selection split across several tool calls; every flag must hold in all of them (fail closed)."""
+    """Join a selection split across several tool calls, failing closed: any claim counts, any gap counts."""
     merged = {}
-    for data in inputs:
+    for data in map(parse_json_lists, inputs):
         for key, value in data.items():
             if key not in merged:
                 merged[key] = value
             elif isinstance(value, list) and isinstance(merged[key], list):
                 merged[key] = merged[key] + value
             elif isinstance(value, bool) and isinstance(merged[key], bool):
-                merged[key] = merged[key] and value
+                merged[key] = (merged[key] or value) if key == "has_factual_claims" else (merged[key] and value)
+            else:
+                raise ValueError("Claude devolvió una selección con formato inválido")
     return merged
 
 
@@ -253,19 +271,7 @@ class ModelOutput(Model):
     @model_validator(mode="before")
     @classmethod
     def parse_lists(cls, data):
-        # Haiku sometimes sends a list field as its JSON text; the content is still validated field by field.
-        if not isinstance(data, dict):
-            return data
-        parsed = {}
-        for key, value in data.items():
-            if isinstance(value, str) and value.lstrip().startswith("["):
-                try:
-                    # raw_decode tolerates trailing prose after the list.
-                    value = json.JSONDecoder().raw_decode(value.lstrip())[0]
-                except ValueError:
-                    pass
-            parsed[key] = value
-        return parsed
+        return parse_json_lists(data)
 
 
 class ModelEntity(Entity):
@@ -446,20 +452,22 @@ def leveled(policy, result):
             dropped.append({"quote": item.quote, "reason": "El objeto " + value + " no es una entidad ni un dato"})
     entities = []
     flags = {item.fact[2] for item in result.items if item not in items}
+    # A variable that holds a protected value (TOKEN_X = abc123) is its container, not the secret, and may be named.
+    secrets = {p.value for p in result.protected_literals}
+    values = {e.id for e in result.entities if e.label in secrets}
+    holders = {item.fact[0] for item in items if item.fact[2] in values}
     for entity in result.entities:
         if entity.id in flags:
             continue
-        level = stricter(entity.confidentiality, levels.pop(entity.id, None))
+        declared = entity.confidentiality
+        if (entity.id in holders and entity.id not in values and re.fullmatch(r"[A-Za-z][A-Za-z0-9]*(_[A-Za-z0-9]+)+", entity.label)
+                and not any(secret in entity.label for secret in secrets)):
+            declared = "interno" if declared in CONFIDENTIAL else declared
+        # A level stated by a flag ("Obo es secreto") always stands.
+        level = stricter(declared, levels.pop(entity.id, None))
         if level is None and entity.type in DATA_NODES:
             level = "interno"  # shortcut: an unstated datum defaults to internal use; the retry asks for a level first.
         entities.append(entity.model_copy(update={"confidentiality": level}))
-    # The variable that holds a protected value is its container, not the secret: TOKEN_X may be named freely.
-    secrets = {p.value for p in result.protected_literals}
-    values = {e.id for e in entities if e.label in secrets}
-    holders = {item.fact[0] for item in items if item.fact[2] in values}
-    entities = [e.model_copy(update={"confidentiality": "interno"})
-                if e.id in holders and e.id not in values and e.confidentiality in CONFIDENTIAL
-                and not any(secret in e.label for secret in secrets) else e for e in entities]
     return items, entities, levels, dropped
 
 
@@ -524,6 +532,8 @@ def propose(policy: Policy, source: Source, grade: Grade | None = None, *, graph
                 if not protected.value.strip() or protected.value not in source.text:
                     invalid_literals = True  # Without the literal value there is nothing to protect or match.
                     continue
+                if len(protected.value.strip()) < 4:
+                    continue  # "de" as a secret would hold every draft; a datum that short is no secret to match.
                 # The value is the evidence: a drifted quote is rebuilt from it, and the model never picks a family
                 # that some role may receive, so the strictest one applies.
                 if protected.quote not in source.text or protected.value not in protected.quote:
@@ -623,23 +633,25 @@ def propose(policy: Policy, source: Source, grade: Grade | None = None, *, graph
     effective = policy
     if source.user is None:
         seen = set()
+        used = {item.fact[1] for item in result.items}
+        used.update(atom[1] for rule in result.rules for atom in [*rule.rule.when, rule.rule.then])
         for index, proposal in enumerate(result.vocabulary):
+            # An unused definition or a redefinition adds nothing; drop it before it can fail the source.
+            if proposal.predicate not in used or proposal.predicate in policy.vocabulary or proposal.predicate in policy.families:
+                continue
             if proposal.quote not in source.text and proposal.predicate not in completed:
                 # A fact using the concept is literal evidence for it; borrow its quote instead of failing the source.
-                quote = next((item.quote for item in result.items
-                              if item.fact[1] == proposal.predicate and item.quote.strip() and item.quote in source.text), None)
+                quote = next((q for q in [item.quote for item in result.items if item.fact[1] == proposal.predicate] +
+                              [r.quote for r in result.rules
+                               if any(atom[1] == proposal.predicate for atom in [*r.rule.when, r.rule.then])]
+                              if q.strip() and q in source.text), None)
                 if quote:
                     proposal = result.vocabulary[index] = proposal.model_copy(update={"quote": quote})
             proposal.validate_source(source.text)
             if proposal.predicate in seen:
                 raise ValueError("Concepto propuesto más de una vez")
             seen.add(proposal.predicate)
-            if proposal.predicate not in policy.vocabulary and proposal.predicate not in policy.families:
-                vocabulary.append(proposal)
-        used = {item.fact[1] for item in result.items}
-        used.update(atom[1] for rule in result.rules for atom in [*rule.rule.when, rule.rule.then])
-        # An unused definition adds nothing to the graph; drop it like a redefinition instead of failing the source.
-        vocabulary = [proposal for proposal in vocabulary if proposal.predicate in used]
+            vocabulary.append(proposal)
         effective = policy.model_copy(update={"vocabulary": {**policy.vocabulary,
                                       **{p.predicate: p.description for p in vocabulary}}})
     events = []
