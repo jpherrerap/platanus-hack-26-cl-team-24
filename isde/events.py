@@ -1,7 +1,7 @@
 """Registro de alertas de evaluaciones; el detalle queda reservado al operador."""
 import hashlib
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 from pydantic import AwareDatetime, Field
@@ -10,13 +10,13 @@ from .claude import model_id
 from .model import INTRINSIC_FAMILY, Model
 
 
-def record(guard, kind, title, target_type, target_id, details, status="open"):
+def record(guard, kind, title, target_type, target_id, details, status="open", created_at=None):
     key = json.dumps([*guard.scope, kind, target_type, target_id], separators=(",", ":"))
     event_id = hashlib.sha256(key.encode()).hexdigest()[:32]
     guard.db.execute("""
         INSERT INTO activity_events VALUES (?,?,?,?,?,?,?,?,?,?,NULL,NULL)
         ON CONFLICT(org,op,event_id) DO NOTHING
-    """, (*guard.scope, event_id, kind, title, datetime.now(timezone.utc).isoformat(),
+    """, (*guard.scope, event_id, kind, title, created_at or datetime.now(timezone.utc).isoformat(),
           target_type, target_id, status, json.dumps(details, ensure_ascii=False)))
     return event_id
 
@@ -128,13 +128,13 @@ def source_event(guard, source, result):
 def listing(guard, limit=50):
     rows = guard.db.execute("""
         SELECT event_id,kind,title,created_at,target_type,status,resolved_at
-        FROM activity_events WHERE org=? AND op=? ORDER BY created_at DESC,event_id DESC LIMIT ?
+        FROM activity_events WHERE org=? AND op=? AND target_type!='mock' ORDER BY created_at DESC,event_id DESC LIMIT ?
     """, (*guard.scope, limit))
     keys = ("id", "kind", "title", "created_at", "target_type", "status", "resolved_at")
     items = [dict(zip(keys, row)) for row in rows]
     counts = {"total": 0, "blocked": 0, "flagged": 0, "allowed": 0, "open": 0}
     for kind, status, count in guard.db.execute(
-        "SELECT kind,status,count(*) FROM activity_events WHERE org=? AND op=? GROUP BY kind,status", guard.scope):
+        "SELECT kind,status,count(*) FROM activity_events WHERE org=? AND op=? AND target_type!='mock' GROUP BY kind,status", guard.scope):
         counts["total"] += count
         counts[kind] += count
         counts["open"] += count if status == "open" else 0
@@ -165,3 +165,45 @@ def resolve(guard, event_id, status, note):
         WHERE org=? AND op=? AND event_id=?
     """, (status, datetime.now(timezone.utc).isoformat(), note, *guard.scope, event_id))
     return detail(guard, event_id)
+
+
+# Illustrative impact mock: fake leaks live only in the Dashboard tab, never in notifications or audits.
+SEVERITY_USD = {"critica": 250_000, "alta": 60_000, "media": 12_000, "baja": 2_000}
+AREAS = ("Finanzas", "Legal", "RR.HH.", "Comercial", "Operaciones", "TI")
+LEAK_TYPES = ("Divulgación directa", "Inferencia por mosaico", "Dato confidencial nombrado", "Identificador personal")
+
+
+def seed_impact(guard, count=120, days=30):
+    import random
+    rand, now = random.Random(26), datetime.now(timezone.utc)
+    # Reseed on each start so the mock window always ends today.
+    guard.db.execute("DELETE FROM activity_events WHERE org=? AND op=? AND target_type='mock'", guard.scope)
+    for i in range(count):
+        severity = rand.choices(tuple(SEVERITY_USD), weights=(1, 3, 5, 6))[0]
+        when = now - timedelta(days=rand.randrange(days))  # whole days keep each leak inside the window
+        record(guard, "blocked", "Leak ficticio prevenido", "mock", f"mock_{i}", {
+            "mock": True, "severity": severity, "area": rand.choice(AREAS),
+            "leak_type": rand.choices(LEAK_TYPES, weights=(2, 4, 3, 2))[0], "loss_usd": SEVERITY_USD[severity],
+        }, "approved", created_at=when.isoformat())
+
+
+def impact(guard, area=None, days=30):
+    today = datetime.now(timezone.utc).date()
+    daily = {(today - timedelta(days=d)).isoformat(): [0, 0] for d in range(days - 1, -1, -1)}
+    severities = {s: [0, 0] for s in SEVERITY_USD}
+    types = {t: [0, 0] for t in LEAK_TYPES}
+    for created_at, details in guard.db.execute(
+            "SELECT created_at,details FROM activity_events WHERE org=? AND op=? AND target_type='mock'", guard.scope):
+        item = json.loads(details)
+        day = created_at[:10]
+        if (area and item["area"] != area) or day not in daily:
+            continue
+        for bucket in (daily[day], severities[item["severity"]], types[item["leak_type"]]):
+            bucket[0] += 1
+            bucket[1] += item["loss_usd"]
+    leaks, loss = sum(c for c, _ in severities.values()), sum(v for _, v in severities.values())
+    pack = lambda table: [{"key": k, "count": c, "loss_usd": v} for k, (c, v) in table.items()]
+    return {"mock": True, "areas": list(AREAS), "area": area, "severity_usd": SEVERITY_USD,
+            "totals": {"leaks": leaks, "loss_usd": loss, "critical": severities["critica"][0],
+                       "avg_loss_usd": round(loss / leaks) if leaks else 0},
+            "severities": pack(severities), "types": pack(types), "daily": pack(daily)}
