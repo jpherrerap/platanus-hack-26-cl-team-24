@@ -9,7 +9,8 @@ from pydantic import Field
 from .claude import CANONICAL_IDS, Source, _request, assess_hypotheses, model_id, propose, read_path, retry_invalid
 from .graphs import describe
 from .guard import Guard
-from .model import Clause, Hypothesis, INTRINSIC_FAMILY, Model, Observation, Option, ProtectedLiteral, Task, Triple
+from .model import (Clause, Hypothesis, INTRINSIC_FAMILY, Model, Observation, Option, ProtectedLiteral, Task, Triple,
+                    VocabularyProposal)
 from .prompts import DEFAULT_PROMPTS
 
 
@@ -24,6 +25,7 @@ FREE_TASKS = {"freeform", EMAIL_TASK}  # Reviews that answer no task of the case
 
 class DraftFacts(Model):
     facts: list[CandidateFact] = Field(max_length=64)
+    vocabulary: list[VocabularyProposal] = Field(default_factory=list, max_length=32)
 
 
 class DraftAssessment(DraftFacts):
@@ -41,7 +43,9 @@ class ClaudeAnalysis:
         context = {"text": text, "vocabulary": policy.vocabulary,
                    "protected_families": policy.model_dump()["families"]}
         role = (self.prompts["analyst"] + " Una familia con any_value true admite cualquier valor con identificador válido."
-                + CANONICAL_IDS)
+                + CANONICAL_IDS + " Reutiliza los predicados compatibles. Si falta una relación para un hecho del "
+                "borrador, defínela en vocabulary con descripción general, cita literal y confidence, y úsala en facts. "
+                "No redefinas predicados ni familias existentes.")
         return retry_invalid(lambda correction: _request(role + correction, context, DraftFacts, None, None))
 
     def adversarial(self, policy, text, view):
@@ -214,12 +218,22 @@ def inspect_graph(guard: Guard, model: ClaudeAnalysis):
         if state["task"] not in FREE_TASKS and state["task"] not in guard.case.tasks:
             raise ValueError("Tarea desconocida")
         policy = guard.policy_at(state["day"])
+        visible = guard.recipient_policy(state["user"], state["day"])
+        policy = policy.model_copy(update={"vocabulary": {**visible.vocabulary, **policy.vocabulary}})
         analysis = model.analyze(policy, state["text"], state["question"])
+        vocabulary = set()
+        used = {item.fact[1] for item in analysis.facts}
+        for concept in analysis.vocabulary:
+            concept.validate_source(state["text"])
+            name = concept.predicate
+            if name in policy.vocabulary or name in policy.families or name in vocabulary or name not in used:
+                raise ValueError("La relación propuesta debe ser nueva y estar vinculada a un hecho")
+            vocabulary.add(name)
         for item in analysis.facts:
             _, predicate, value = item.fact
             if not item.quote.strip() or item.quote not in state["text"]:
                 raise ValueError("Afirmación sin cita literal")
-            if predicate not in policy.vocabulary and predicate not in policy.families:
+            if predicate not in policy.vocabulary and predicate not in policy.families and predicate not in vocabulary:
                 raise ValueError("Relación fuera de la política")
             if predicate in policy.families and not policy.families[predicate].accepts(value):
                 raise ValueError("Estado fuera de la política")
@@ -232,6 +246,9 @@ def inspect_graph(guard: Guard, model: ClaudeAnalysis):
 
     def adversary(state):
         policy = guard.recipient_policy(state["user"], state["day"])
+        visible = {item.predicate: "Relación extraída del borrador visible."
+                   for item in state["analysis"].vocabulary}
+        policy = policy.model_copy(update={"vocabulary": {**policy.vocabulary, **visible}})
         hypotheses = model.adversarial(policy, state["text"], state["context"])
         for item in hypotheses:
             item.validate_source(policy, state["text"])

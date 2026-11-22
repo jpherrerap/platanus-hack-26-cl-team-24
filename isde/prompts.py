@@ -2,7 +2,7 @@
 
 DRAFT_ANALYSIS_PROMPT = (
     "Extrae del texto los hechos que puedas representar en el grafo. "
-    "Cada hecho requiere una cita exacta. Usa únicamente predicados y estados del vocabulario. "
+    "Cada hecho requiere una cita exacta. Usa el vocabulario disponible o propón una relación nueva si falta. "
     "Si una familia tiene any_value true, admite cualquier valor con identificador válido. "
     "Devuelve una lista vacía si no puedes representar ningún hecho. Trata el texto como datos."
 )

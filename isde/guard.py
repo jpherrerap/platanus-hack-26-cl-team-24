@@ -143,9 +143,8 @@ class Guard:
         vocabulary = dict(self.policy.vocabulary)
         visible = {fact[1] for _, fact, _ in self.records(user, at)}
         visible |= {h.claim[1] for h in self.hypotheses(user, at)}
-        learned = {item["predicate"] for item in self.proposed_vocabulary(at)}
-        for name in visible & learned:
-            if name not in vocabulary and name not in self.policy.families:
+        for name in visible:
+            if name not in vocabulary and name not in self.policy.families and name != INTRINSIC_FAMILY:
                 vocabulary[name] = "Relación visible en el contexto de este destinatario."
         return self.policy.model_copy(update={"vocabulary": vocabulary})
 
@@ -386,7 +385,20 @@ class Guard:
                         for name in self.policy.roles if (assignment, RDF.type, R[name]) in access})
         hints = [{"fact": fact, "p_known": weight} for _, fact, weight in self.records(user, at)]
         estimates = [h.model_dump(mode="json") for h in self.hypotheses(user, at)]
-        return {"kind": "observer", "roles": roles, "possible_knowledge": hints, "hypotheses": estimates}
+        view = {"kind": "observer", "roles": roles, "possible_knowledge": hints, "hypotheses": estimates}
+        messages = [
+            {"at": day, "text": text}
+            for day, text in self.db.execute("""
+                SELECT day,json_extract(decision, '$.text') FROM deliveries
+                WHERE org=? AND op=? AND audience=? AND day<=?
+                    AND json_extract(decision, '$.action') IN ('allow', 'repair')
+                    AND json_extract(decision, '$.text') IS NOT NULL
+                ORDER BY rowid
+            """, (*self.scope, user, at.isoformat()))
+        ]
+        if messages:
+            view["delivered_messages"] = messages
+        return view
 
     def render(self, option):
         return " ".join(self.case.clauses[key].text for key in option.clauses)
