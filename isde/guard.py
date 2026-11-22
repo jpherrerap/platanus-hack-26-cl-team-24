@@ -2,12 +2,14 @@
 import hashlib
 import json
 import sqlite3
+from collections import defaultdict
 from contextlib import contextmanager
 from datetime import date
 
 from rdflib import RDF
 
-from .graphs import E, P, R, V, internal_view, make_schema, observer_view, probabilities, rdf_fact, role_graph, user_grants
+from .graphs import (E, P, R, V, describe, explain, internal_view, make_schema, observer_view, path_goals, plain,
+                     probabilities, rdf_fact, role_graph, signature, user_grants, value_nodes)
 from .model import Case, INTRINSIC_FAMILY, Observation, ObserverEstimate, Policy, RuleProposal, intrinsic_family
 from .privacy import RutProtection
 
@@ -62,6 +64,13 @@ class Guard:
             CREATE TABLE IF NOT EXISTS deliveries (
                 org TEXT, op TEXT, audience TEXT, request_id TEXT, task TEXT, draft_hash TEXT, day TEXT,
                 decision TEXT, PRIMARY KEY(org, op, audience, request_id));
+            CREATE TABLE IF NOT EXISTS kg_nodes (
+                org TEXT, op TEXT, id TEXT, type TEXT, label TEXT, PRIMARY KEY(org, op, id));
+            CREATE TABLE IF NOT EXISTS kg_aliases (
+                org TEXT, op TEXT, alias TEXT, id TEXT, PRIMARY KEY(org, op, alias));
+            CREATE TABLE IF NOT EXISTS path_ratings (
+                org TEXT, op TEXT, signature TEXT, relation TEXT, confidence REAL, assessor TEXT,
+                PRIMARY KEY(org, op, signature));
         """)
 
     @contextmanager
@@ -151,6 +160,10 @@ class Guard:
                         return False
                 if not observations:
                     return False
+            resolve = self.resolver()
+            for event in observations:
+                for entity in event.entities:
+                    self._register(entity, resolve)
             for event in sorted(observations, key=lambda event: not bool(event.vocabulary)):
                 for proposal in event.vocabulary:
                     proposal.validate_source(event.quote)
@@ -179,6 +192,7 @@ class Guard:
                         continue
                 for hypothesis in event.hypotheses:
                     hypothesis.validate_source(effective, event.quote)
+                    hypothesis = hypothesis.model_copy(update={"claim": self._canonical(hypothesis.claim, resolve, effective)})
                     self._record_hypothesis(event.user, "src:" + event.origin, event.at, event.grade,
                                             1. if event.confidence is None else event.confidence,
                                             hypothesis, event.assessor)
@@ -191,13 +205,105 @@ class Guard:
                     """, (*self.scope, "src:" + event.origin, event.at.isoformat(),
                           json.dumps(proposal.rule.model_dump(), sort_keys=True), proposal.quote,
                           proposal.confidence, event.assessor))
-                self._record(event.user or "", "src:" + event.origin, event.facts, event.at,
+                self._record(event.user or "", "src:" + event.origin,
+                             [self._canonical(fact, resolve, effective) for fact in event.facts], event.at,
                              event.grade or "internal", 1. if event.confidence is None else event.confidence,
                              event.quote)
             if source_id is not None and not previous:
                 self.db.execute("INSERT INTO source_imports VALUES (?,?,?,?)",
                                 (*self.scope, source_id, source_digest))
             return True
+
+    def resolver(self):
+        """Map a mention to its node: declared alias, exact id, or the only id equal up to underscores."""
+        aliases = dict(self.db.execute("SELECT alias,id FROM kg_aliases WHERE org=? AND op=?", self.scope))
+        known = {row[0] for row in self.db.execute("SELECT id FROM kg_nodes WHERE org=? AND op=?", self.scope)}
+        for table, column in (("evidence", "fact"), ("interpretations", "claim")):
+            for (raw,) in self.db.execute(f"SELECT DISTINCT {column} FROM {table} WHERE org=? AND op=?", self.scope):
+                subject, _, value = json.loads(raw)
+                known.update((subject, value))
+        keys = defaultdict(set)
+        for name in known:
+            keys[name.replace("_", "")].add(name)
+
+        def resolve(name):
+            # shortcut: underscore-insensitive matching can join ids like a_bc and ab_c; declare aliases if it bites.
+            if name in aliases:
+                return aliases[name]
+            if name not in known and len(keys[name.replace("_", "")]) == 1:
+                return next(iter(keys[name.replace("_", "")]))
+            known.add(name)
+            keys[name.replace("_", "")].add(name)
+            return name
+        resolve.aliases = aliases
+        resolve.known = known
+        return resolve
+
+    def _canonical(self, fact, resolve, policy):
+        subject, predicate, value = fact
+        # Family states are a closed vocabulary, never entity mentions.
+        if predicate in policy.families or predicate == INTRINSIC_FAMILY:
+            return resolve(subject), predicate, value
+        return resolve(subject), predicate, resolve(value)
+
+    def _register(self, entity, resolve):
+        node = resolve(entity.id)
+        self.db.execute("""
+            INSERT INTO kg_nodes VALUES (?,?,?,?,?)
+            ON CONFLICT(org,op,id) DO UPDATE SET type=CASE WHEN type='entidad' THEN excluded.type ELSE type END
+        """, (*self.scope, node, entity.type, entity.label))
+        for alias in entity.aliases:
+            # An alias that already names another node is ambiguous: keep both nodes instead of merging them.
+            if alias == node or alias in resolve.aliases or alias in resolve.known:
+                continue
+            self.db.execute("INSERT INTO kg_aliases VALUES (?,?,?,?)", (*self.scope, alias, node))
+            resolve.aliases[alias] = node
+
+    def labels(self):
+        return dict(self.db.execute("SELECT id,label FROM kg_nodes WHERE org=? AND op=?", self.scope))
+
+    def path_ratings(self):
+        return dict(self.db.execute("SELECT signature,confidence FROM path_ratings WHERE org=? AND op=?", self.scope))
+
+    def secrets(self, at):
+        private = internal_view(self.schema, [f for _, f, _ in self.records("", at)], self.policy_at(at))
+        return sorted(f for f in plain(private) if f[1] in self.policy.families)
+
+    def unrated_paths(self, user, at, extra=()):
+        """Paths toward internal secrets that neither a rule nor a stored reading explains yet."""
+        policy = self.risk_policy(at)
+        facts = {f for _, f, _ in self.records(user, at)} | {h.claim for h in self.hypotheses(user, at)} | set(extra)
+        rated = self.path_ratings()
+        return [(goal, path, signature(goal, path)) for goal, paths in path_goals(policy, facts, self.secrets(at)).items()
+                for path, backed in paths if not backed and signature(goal, path) not in rated]
+
+    def rate_paths(self, readings, assessor):
+        self.db.executemany("""
+            INSERT INTO path_ratings VALUES (?,?,?,?,?,?)
+            ON CONFLICT(org,op,signature) DO UPDATE SET relation=excluded.relation,
+                confidence=excluded.confidence, assessor=excluded.assessor
+        """, [(*self.scope, sig, relation, confidence, assessor) for sig, relation, confidence in readings])
+
+    def graph(self, user, at):
+        """Nodes and labelled edges seen by one audience; '' is the internal graph."""
+        rows = self.db.execute("""
+            SELECT origin,fact,grade,cap,quote FROM evidence WHERE org=? AND op=? AND audience=? AND day<=?
+            ORDER BY rowid
+        """, (*self.scope, user, at.isoformat())).fetchall()
+        edges = []
+        for origin, raw, grade, cap, quote in rows:
+            subject, predicate, value = json.loads(raw)
+            edges.append({"source": subject, "target": value, "predicate": predicate,
+                          "relation": predicate.replace("_", " "), "origin": origin, "quote": quote,
+                          "weight": min(cap, self.policy.evidence.get(grade, 1.))})
+        facts = {(e["source"], e["predicate"], e["target"]) for e in edges}
+        values = value_nodes(self.policy_at(at), facts)
+        stored = {node: (kind, label) for node, kind, label in
+                  self.db.execute("SELECT id,type,label FROM kg_nodes WHERE org=? AND op=?", self.scope)}
+        names = sorted({term for e in edges for term in (e["source"], e["target"])})
+        nodes = [{"id": name, "type": "valor" if name in values else stored.get(name, ("entidad",))[0],
+                  "label": stored.get(name, (None, name))[1]} for name in names]
+        return {"nodes": nodes, "edges": edges}
 
     def records(self, user, at):
         rows = self.db.execute("""
@@ -248,7 +354,13 @@ class Guard:
                                str(o).removeprefix(str(E))) for s, p, o in potential
                               if str(p).startswith(str(P)) and (s, p, o) not in private)
             row = self.db.execute("SELECT revision FROM dashboard_config WHERE org=? AND op=?", self.scope).fetchone()
-            return {"kind": "internal", "facts": triples, "proposed_rules": proposals,
+            entities = [{"id": node, "type": kind, "label": label,
+                         "aliases": [a for (a,) in self.db.execute(
+                             "SELECT alias FROM kg_aliases WHERE org=? AND op=? AND id=? ORDER BY alias",
+                             (*self.scope, node))]}
+                        for node, kind, label in self.db.execute(
+                            "SELECT id,type,label FROM kg_nodes WHERE org=? AND op=? ORDER BY id", self.scope).fetchall()]
+            return {"kind": "internal", "facts": triples, "entities": entities, "proposed_rules": proposals,
                     "proposed_vocabulary": self.proposed_vocabulary(at),
                     "possible_inferences": inferred, "config_revision": row[0] if row else 0}
         access = role_graph(self.schema, self.case, at)
@@ -271,7 +383,10 @@ class Guard:
         rut_protection = RutProtection(private_facts, records)
         historical = self.hypotheses(user, at)
         risk_policy = self.risk_policy(at)
-        baseline = probabilities(risk_policy, observer_view(records, historical))
+        secrets = sorted(f for f in plain(private) if f[1] in self.policy.families)
+        ratings = self.path_ratings()
+        labels = self.labels()
+        baseline = probabilities(risk_policy, observer_view(records, historical), secrets, ratings)
         _, allowed = user_grants(self.policy, role_graph(self.schema, self.case, at), user)
         attempts = []
         options = list(task.options)
@@ -320,7 +435,8 @@ class Guard:
                     origin = "out-text:" + hashlib.sha256(text.encode()).hexdigest()
                 projected.append(ObserverEstimate(**hypothesis.model_dump(), origin=origin,
                                                   at=at, assessor=assessor, p_seen=self.policy.evidence["delivered"]))
-            after = probabilities(risk_policy, observer_view(possible, historical + projected))
+            after = probabilities(risk_policy, observer_view(possible, historical + projected), secrets, ratings)
+            seen = [fact for _, fact, _ in possible] + [h.claim for h in historical + projected]
             blocked, changes = [], []
             for goal, posterior in sorted(after.items()):
                 subject, family, status = goal
@@ -336,6 +452,7 @@ class Guard:
                 intrinsic_risk = family == INTRINSIC_FAMILY and any(
                     h.claim == goal and h.p_seen * h.p_if_seen >= rule.increase for h in projected)
                 if delta > 1e-9 or direct or intrinsic_risk:
+                    entry["paths"] = explain(risk_policy, seen, goal, labels)
                     changes.append(entry)
                 if direct or intrinsic_risk or (delta > 1e-9 and (posterior >= rule.absolute or delta >= rule.increase)):
                     blocked.append(entry)

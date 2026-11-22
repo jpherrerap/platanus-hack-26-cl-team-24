@@ -1,4 +1,5 @@
 """RDF views, scoped role inheritance, and probability of an observer's knowledge."""
+import json
 import warnings
 from collections import defaultdict
 from datetime import date
@@ -117,6 +118,82 @@ def close_rules(graph, rules):
             graph.add(fact)
 
 
+def plain(graph):
+    """Entity-predicate-entity triples of a graph, without RDF/OWL vocabulary."""
+    prefixes = (str(E), str(P), str(E))
+    return {tuple(str(term).removeprefix(prefix) for term, prefix in zip(triple, prefixes)) for triple in graph
+            if all(str(term).startswith(prefix) for term, prefix in zip(triple, prefixes))}
+
+
+def value_nodes(policy, facts):
+    """Family states are values: a path may end on one but never bridge two entities through it."""
+    values = {status for family in policy.families.values() for status in family.statuses}
+    values.update(value for _, predicate, value in facts if predicate in policy.families)
+    return values
+
+
+def find_paths(facts, start, goal, *, max_length, max_degree, blocked=frozenset(), limit=10):
+    """Simple paths from start to goal, walking each edge in either direction."""
+    adjacency = defaultdict(list)
+    for fact in sorted(set(facts)):
+        adjacency[fact[0]].append((fact[2], fact))
+        adjacency[fact[2]].append((fact[0], fact))
+    found = []
+
+    def walk(node, visited, steps):
+        for following, fact in adjacency[node]:
+            if following == goal:
+                found.append(steps + [fact])
+            elif (following not in visited and following not in blocked and len(steps) + 1 < max_length
+                  and len(adjacency[following]) <= max_degree):
+                walk(following, visited | {following}, steps + [fact])
+
+    if start != goal:
+        walk(start, {start}, [])
+    return sorted(found, key=len)[:limit]
+
+
+def derived(facts, rules):
+    """Conclusions the policy rules draw from these facts alone: the deterministic reading of a path."""
+    graph = Graph()
+    for fact in facts:
+        graph.add(rdf_fact(fact))
+    return plain(close_rules(graph, rules)) - set(facts)
+
+
+def signature(goal, path):
+    return json.dumps([list(goal), [list(fact) for fact in path]], separators=(",", ":"))
+
+
+def describe(path, labels=None):
+    """One subject-verb-object sentence per edge, readable by an operator or a model."""
+    labels = labels or {}
+    return [f"{labels.get(s, s)} {p.replace('_', ' ')} {labels.get(o, o)}" for s, p, o in path]
+
+
+def path_goals(policy, facts, goals):
+    """For each goal, the observer's paths between its two ends and whether a rule turns the path into the goal."""
+    facts = set(facts)
+    blocked = value_nodes(policy, facts | set(goals))
+    rules = logical_rules(policy)
+    result = {}
+    for goal in goals:
+        paths = find_paths(facts - {goal}, goal[0], goal[2], max_length=policy.paths.max_length,
+                           max_degree=policy.paths.max_degree, blocked=blocked)
+        # One edge between the ends is a different relation, not a path; keep it only when a rule reads the goal from it.
+        result[goal] = [(path, backed) for path in paths
+                        if (backed := goal in derived(path, rules)) or len(path) > 1]
+    return result
+
+
+def explain(policy, facts, goal, labels=None):
+    rules = logical_rules(policy)
+    return [{"edges": [list(fact) for fact in path], "text": describe(path, labels), "rule": backed,
+             "relations": sorted(list(fact) for fact in derived(path, rules) if {fact[0], fact[2]} == {goal[0], goal[2]}),
+             "signature": signature(goal, path)}
+            for path, backed in path_goals(policy, facts, [goal])[goal]]
+
+
 def internal_view(schema, facts, policy=None):
     graph = Graph() + schema
     for fact in facts:
@@ -154,7 +231,7 @@ def observer_view(records, hypotheses=()):
     return graph
 
 
-def probabilities(policy: Policy, view: Graph):
+def probabilities(policy: Policy, view: Graph, secrets=(), ratings=None):
     grouped = defaultdict(dict)
     entities = set()
     for node in view.subjects(RDF.type, RDF.Statement):
@@ -224,6 +301,22 @@ def probabilities(policy: Policy, view: Graph):
             family = predicate_text.removeprefix(str(P))
             if family in policy.families:
                 targets[family][subject_text.removeprefix(str(E))].add(value_text.removeprefix(str(E)))
+    # A path between the ends of an internal secret is a possible inference even without a declared rule.
+    ratings = ratings or {}
+    observed = plain(potential)
+    nodes = {term for fact in observed for term in (fact[0], fact[2])}
+    goals = [goal for goal in secrets if goal[1] in policy.families and goal[0] in nodes and goal[2] in nodes]
+    count = 0
+    for goal, paths in path_goals(policy, observed, goals).items():
+        for path, backed in paths:
+            rate = ratings.get(signature(goal, path), policy.paths.weight)
+            if backed or rate <= 0:
+                continue
+            body = ", ".join(f"known({','.join(symbols[term] for term in fact)})" for fact in path)
+            lines.append(f"{rate:.6f}::path({count}).")
+            lines.append(f"known({','.join(symbols[term] for term in goal)}) :- path({count}), {body}.")
+            targets[goal[1]][goal[0]].add(goal[2])
+            count += 1
     queries = {}
     for family, subjects in targets.items():
         for subject, reachable in subjects.items():

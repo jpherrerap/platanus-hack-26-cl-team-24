@@ -12,6 +12,7 @@ Triple = tuple[Id, Id, Id]
 RuleTerm = Annotated[str, Field(pattern=r"^(?:[a-z][a-z0-9_]{0,95}|\?[a-z][a-z0-9_]{0,95})$")]
 RuleAtom = tuple[RuleTerm, Id, RuleTerm]
 Grade = Literal["possible_access", "external_hint", "delivered", "read", "cited"]
+NodeType = Literal["persona", "organizacion", "documento", "evento", "rol", "fuente", "dato", "valor", "entidad"]
 INTRINSIC_FAMILY = "intrinsic_sensitivity"
 
 
@@ -122,6 +123,13 @@ class VocabularyProposal(Model):
             raise ValueError("El concepto requiere descripción y cita literal de la fuente")
 
 
+class PathSearch(Model):
+    max_length: int = Field(default=3, ge=1, le=5)
+    # An unrated path without a matching rule is advisory: 0.4 keeps two cited hops (0.98²·0.4) below the default increase.
+    weight: Probability = .4
+    max_degree: int = Field(default=12, ge=2, le=1000)  # Hubs like a shared company node are endpoints, not bridges.
+
+
 class Policy(Model):
     version: Literal[1]
     roles: dict[Id, Role]
@@ -131,6 +139,7 @@ class Policy(Model):
     chains: list[Chain] = []
     rules: list[Rule] = []
     assess_drafts: bool = False
+    paths: PathSearch = PathSearch()
 
     @model_validator(mode="after")
     def references(self):
@@ -234,12 +243,20 @@ class ObserverEstimate(Hypothesis):
     assessor: str
 
 
+class Entity(Model):
+    id: Id
+    type: NodeType = "entidad"
+    label: str = Field(min_length=1, max_length=200)
+    aliases: list[Id] = Field(default_factory=list, max_length=16)
+
+
 class Observation(Model):
     origin: Id  # Stable identity of the underlying evidence, including copies.
     facts: list[Triple] = []
     hypotheses: list[Hypothesis] = []
     rules: list[RuleProposal] = Field(default_factory=list, max_length=32)
     vocabulary: list[VocabularyProposal] = Field(default_factory=list, max_length=32)
+    entities: list[Entity] = Field(default_factory=list, max_length=64)
     assessor: str = "adapter"
     at: date
     user: Id | None = None  # None is internal only.
@@ -250,8 +267,10 @@ class Observation(Model):
 
     @model_validator(mode="after")
     def audience(self):
-        if not self.facts and not self.hypotheses and not self.rules and not self.vocabulary:
+        if not self.facts and not self.hypotheses and not self.rules and not self.vocabulary and not self.entities:
             raise ValueError("La observación está vacía")
+        if self.entities and self.user is not None:
+            raise ValueError("Las entidades y sus alias solo se registran desde fuentes internas")
         if self.vocabulary and (self.user is not None or not self.quote):
             raise ValueError("Los conceptos propuestos requieren fuente interna con cita")
         if self.rules and (self.user is not None or not self.quote):

@@ -473,6 +473,21 @@ def create_app(*, db: str | None = None, rewrite=claude_rewrite, seed=True, mode
             finally:
                 guard.close()
 
+    @app.get("/v1/graph")
+    def relation_graph(response: Response, user: str = Query(default=""), day: date | None = None,
+                       x_mosaic_operator_token: str = Header(default="")):
+        # Operator-only: the internal graph and what a recipient is believed to know are both private traces.
+        require_operator(x_mosaic_operator_token)
+        response.headers["Cache-Control"] = "no-store"
+        with lock:
+            guard = open_guard()
+            try:
+                if user and user not in {a.user for a in case.assignments if (a.org, a.operation) == guard.scope}:
+                    raise HTTPException(status_code=404, detail="Destinatario desconocido")
+                return guard.graph(user, day or date.today())
+            finally:
+                guard.close()
+
     @app.get("/v1/inbox/{user}")
     def inbox(user: str):
         with lock:
