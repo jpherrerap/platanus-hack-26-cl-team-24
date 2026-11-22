@@ -1433,7 +1433,7 @@ class AgentApiTests(unittest.TestCase):
         self.assertEqual(len(self.client.get("/v1/inbox/ana").json()["messages"]), 1)
         self.assertEqual(self.client.post("/v1/messages", json=second).json(), result)
 
-    def test_every_message_decision_appears_in_activity_without_text(self):
+    def test_every_message_decision_appears_in_activity_with_audit_content(self):
         from fastapi.testclient import TestClient
         from isde.api import create_app
         with mock.patch.dict(os.environ, {"MOSAIC_OPERATOR_TOKEN": "secreto"}):
@@ -1452,11 +1452,18 @@ class AgentApiTests(unittest.TestCase):
         titles = {e["title"] for e in listing["events"]}
         self.assertIn("Se reparó una respuesta antes de entregarla", titles)  # luis: original draft was blocked
         self.assertIn("Se retuvo una respuesta para revisión humana", titles)
+        details = {}
         for event in listing["events"]:
             detail = client.get(f"/v1/demo/events/{event['id']}", headers={"x-mosaic-operator-token": "secreto"}).json()
-            self.assertEqual(detail["details"]["origin"], "message_api")
-            self.assertNotIn("O-17", json.dumps(detail, ensure_ascii=False))
-            self.assertNotIn("viernes", json.dumps(detail, ensure_ascii=False))
+            details[detail["details"]["recipient"], detail["details"]["task"]] = detail["details"]
+        self.assertEqual(client.get(f"/v1/demo/events/{event['id']}").status_code, 403)
+        repaired = details["luis", "due"]
+        self.assertEqual((repaired["draft"], repaired["candidate"]), (self.request["draft"],) * 2)
+        self.assertEqual(repaired["delivered_text"], "El trámite vence el viernes.")
+        self.assertTrue(repaired["decision"]["attempts"][0]["blocked"])
+        self.assertEqual(repaired["logs"][1]["output"]["action"], "repair")
+        held = details["ana", "record"]
+        self.assertEqual((held["draft"], held["delivered_text"]), (review["draft"], None))
 
     def test_unknown_agent_text_requires_recognizable_rewrite(self):
         from fastapi.testclient import TestClient

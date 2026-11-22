@@ -23,19 +23,22 @@ MESSAGE_TITLES = {"allow": "Se entregó una respuesta sin cambios",
                   "review": "Se retuvo una respuesta para revisión humana"}
 
 
-def message_event(guard, request_id, user, task, result, screened):
+def message_event(guard, item, evaluated, result, screened):
     # Attempts come from the agent's original draft, which shows what was at risk before any rewrite.
-    # Metadata only: the draft, delivered text, attachments and hypothesis quotes stay out of the log.
-    attempts = [{key: attempt[key] for key in ("changes", "blocked", "reason") if key in attempt}
-                for attempt in screened.get("attempts", [])]
     if result["action"] == "allow":
         kind, status = "allowed", "delivered"
     else:
-        kind, status = ("blocked" if any(a.get("blocked") for a in attempts) else "flagged"), "open"
-    return record(guard, kind, MESSAGE_TITLES[result["action"]], "message", f"{request_id}:{user}", {
-        "origin": "message_api", "request_id": request_id, "recipient": user, "task": task,
-        "decision": {"action": result["action"], "attempts": attempts},
-        "notice": "Solo decisión y metadatos; no incluye el borrador, el texto entregado ni los adjuntos.",
+        kind, status = ("blocked" if any(a.get("blocked") for a in screened.get("attempts", [])) else "flagged"), "open"
+    # Full content for the operator's audit; files are kept as metadata and digest, not bytes.
+    return record(guard, kind, MESSAGE_TITLES[result["action"]], "message", f"{item.request_id}:{item.user}", {
+        "origin": "message_api", "request_id": item.request_id, "recipient": item.user, "task": item.task,
+        "day": item.day.isoformat(), "draft": item.draft, "candidate": evaluated, "delivered_text": result["text"],
+        "attachments": [{"name": a.name, "media_type": a.media_type, "bytes": len(a.raw()), "sha256": a.digest()}
+                        for a in item.attachments],
+        "model": model_id(), "decision": {"action": result["action"], "attempts": screened.get("attempts", [])},
+        "logs": [{"component": "rdf_problog · borrador original", "output": screened},
+                 {"component": "rdf_problog · decisión final", "output": result}],
+        "notice": "Registro completo para auditoría: texto evaluado, transcripción de adjuntos y traza de la decisión.",
     }, status)
 
 
