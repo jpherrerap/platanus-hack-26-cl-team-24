@@ -2076,7 +2076,7 @@ class SemanticApiTests(unittest.TestCase):
             self.assertEqual(parsed.nodes["tab-"+tab][1]["aria-controls"], "panel-"+tab)
             self.assertEqual(parsed.nodes["panel-"+tab][1]["role"], "tabpanel")
         for name in ("source-text","preview-source","accept-source","answer","check-answer","prompt",
-                     "secret-id","secret-mode","operator-token","notification-feed","flag-feed","event-dialog"):
+                     "secret-id","secret-mode","operator-token","forget-token","notification-feed","flag-feed","event-dialog"):
             self.assertIn(name, parsed.nodes)
         self.assertIn("No hay conexión de envío de correo", page)
         self.assertEqual(self.client.get("/v1/demo/events").json()["counts"]["total"], 0)

@@ -142,7 +142,7 @@ def create_app(*, db: str | None = None, rewrite=claude_rewrite, seed=True, mode
         if operator_token and local:
             page = page.replace('placeholder="Introduce tu token">',
                                 f'value="{html.escape(operator_token)}" readonly>', 1).replace(
-                "Se mantiene solo en esta página, sin guardarlo.", "Cargado desde MOSAIC_OPERATOR_TOKEN.", 1)
+                "Se guarda solo en este navegador.", "Cargado desde MOSAIC_OPERATOR_TOKEN.", 1)
         return HTMLResponse(page, headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
                             "Content-Security-Policy": "default-src 'self'; script-src 'unsafe-inline'; "
                                                        "style-src 'unsafe-inline'; object-src 'none'; "
