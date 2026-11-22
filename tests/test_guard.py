@@ -1475,6 +1475,16 @@ class AgentApiTests(unittest.TestCase):
         self.assertEqual(self.calls, [])
         self.assertEqual(self.client.get("/v1/inbox/luis").json()["messages"], [])
 
+    def test_env_file_fills_missing_variables_only(self):
+        from isde.cli import load_env
+        path = Path(self.tmp.name) / ".env"
+        path.write_text("# comentario\nELEVENLABS_API_KEY=\nexport ISDE_STT_MODEL='scribe_v3'\n"
+                        "ANTHROPIC_API_KEY=del_archivo\nsin_igual\n")
+        with mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "del_entorno"}, clear=True):
+            load_env(path)
+            self.assertEqual(dict(os.environ), {"ANTHROPIC_API_KEY": "del_entorno", "ISDE_STT_MODEL": "scribe_v3"})
+            load_env(Path(self.tmp.name) / "no_existe")
+
     def test_audio_attachment_is_transcribed_with_elevenlabs(self):
         from isde.media import Attachment, with_attachments
         sent = {}

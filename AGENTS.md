@@ -29,7 +29,7 @@ isde demo                                 # caso ficticio en memoria
 - El contexto de un observador nunca incluye el grafo interno, las asignaciones ni otros destinatarios (`Guard.model_context`).
 - Las entregas son idempotentes por `request_id` y respetan el orden del historial. Los registros de entrega no se reescriben.
 - Rol, organización, operación y origen vienen de la integración de confianza, nunca del modelo.
-- La API key se lee de `ANTHROPIC_API_KEY` o del llavero (`isde key`); la de ElevenLabs, de `ELEVENLABS_API_KEY`. Nunca van en archivos del repo.
+- La API key se lee de `ANTHROPIC_API_KEY` o del llavero (`isde key`); la de ElevenLabs, de `ELEVENLABS_API_KEY`. El servidor y la CLI leen `.env` (ver `.env.example`, ignorado por git) sin reemplazar el entorno. Nunca van en archivos versionados.
 
 ## Convenciones
 

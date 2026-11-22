@@ -19,6 +19,18 @@ HERE = Path(__file__).resolve().parent
 EXAMPLES = HERE / "examples" if (HERE / "examples").is_dir() else HERE.parent / "examples"
 
 
+def load_env(path=".env"):
+    """Reads KEY=value lines from .env without overriding variables already set."""
+    try:
+        lines = Path(path).read_text().splitlines()
+    except FileNotFoundError:
+        return
+    for line in lines:
+        key, sep, value = line.strip().removeprefix("export ").partition("=")
+        if sep and key and not key.startswith("#") and value.strip():
+            os.environ.setdefault(key.strip(), value.strip().strip("'\""))
+
+
 def show(value):
     print(json.dumps(value, indent=2, ensure_ascii=False))
 
@@ -122,6 +134,8 @@ def demo(guard, policy, case, history, as_json):
 
 
 def main(argv=None):
+    if argv is None:  # tests pass argv and must not pick up real keys
+        load_env()
     parser = argparse.ArgumentParser(prog="mosaic", description="mosAIc · evaluación local de respuestas de agentes")
     parser.add_argument("--policy", default=str(EXAMPLES / "policy.yaml"))
     parser.add_argument("--case", default=str(EXAMPLES / "case.yaml"))

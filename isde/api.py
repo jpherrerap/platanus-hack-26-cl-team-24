@@ -13,7 +13,7 @@ from .semantic import ClaudeAnalysis, SourceInput, source_graph
 from . import events as activity_events, reviews
 from pydantic import BaseModel, ConfigDict, Field
 
-from .cli import EXAMPLES
+from .cli import EXAMPLES, load_env
 from .guard import Guard
 from .media import Attachment, with_attachments
 from .model import Batch, Case, Family, Policy
@@ -86,6 +86,9 @@ class EventResolution(BaseModel):
 
 
 def create_app(*, db: str | None = None, rewrite=claude_rewrite, seed=True, model=None):
+    # Only the real server (uvicorn --factory, no arguments) reads .env; tests pass db and must not pick up real keys.
+    if db is None:
+        load_env()
     db = db or os.environ.get("MOSAIC_API_DB", os.environ.get("ISDE_API_DB", "mosaic-api.sqlite"))
     samples = EXAMPLES
     policy = Policy.load(os.environ.get("MOSAIC_POLICY", os.environ.get("ISDE_POLICY", str(samples / "mvp-policy.yaml"))))
