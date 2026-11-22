@@ -663,11 +663,11 @@ class DynamicVocabularyTests(unittest.TestCase):
             path = str(Path(folder)/"data.sqlite")
             create_app(db=path)
             vocabulary = TestClient(create_app(db=path)).get("/v1/demo/config").json()["vocabulary"]
-            self.assertTrue({"domicilio", "tipo_de_dato", "tiene_diagnostico_medico"} <= vocabulary.keys())
+            self.assertTrue({"domicilio", "es_credencial_privada", "puede_compartirse"} <= vocabulary.keys())
             guard = Guard(path, self.policy, self.case)
             try:
                 literals = {row[0] for row in guard.db.execute("SELECT value FROM protected_literals")}
-                self.assertEqual(literals, {"Avenida de Ejemplo 123", "DEMO_TOKEN_NO_VALIDO_123"})
+                self.assertEqual(literals, {"Avenida de Ejemplo 123", "DEMO_TOKEN_NO_VALIDO_123", "diagnóstico médico"})
             finally:
                 guard.close()
 

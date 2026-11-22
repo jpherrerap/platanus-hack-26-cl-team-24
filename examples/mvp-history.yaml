@@ -11,7 +11,7 @@ observations:
 - origin: simulacion_correo
   vocabulary:
   - predicate: domicilio
-    description: Dirección de residencia o ubicación postal de una persona.
+    description: Dirección residencial o ubicación física de una persona
     quote: mi dirección es Avenida de Ejemplo 123
     confidence: 0.95
   assessor: claude-haiku-4-5-20251001
@@ -36,20 +36,18 @@ observations:
   - id: token_interno
     type: dato
     label: TOKEN_INTERNO
-    aliases:
-    - variable_token_interno
   assessor: claude-haiku-4-5-20251001
   at: '2026-11-22'
 - origin: simulacion_codigo
   vocabulary:
-  - predicate: tipo_de_dato
-    description: Clasificación funcional de un dato o variable según su propósito o naturaleza.
+  - predicate: es_credencial_privada
+    description: Indica que un dato es una credencial privada que debe mantenerse confidencial
     quote: Se usa como credencial privada
-    confidence: 0.9
-  - predicate: restriccion_publicacion
-    description: Restricción explícita sobre la divulgación o publicación de un dato.
+    confidence: 0.98
+  - predicate: restriction_divulgacion
+    description: Restricción explícita sobre la divulgación o publicación de un dato
     quote: no debe publicarse
-    confidence: 0.9
+    confidence: 0.98
   assessor: claude-haiku-4-5-20251001
   at: '2026-11-22'
   quote: En un proyecto ficticio, la variable TOKEN_INTERNO contiene DEMO_TOKEN_NO_VALIDO_123. Se usa como credencial privada;
@@ -57,15 +55,15 @@ observations:
 - origin: simulacion_codigo
   facts:
   - - token_interno
-    - tipo_de_dato
-    - credencial_privada
+    - es_credencial_privada
+    - verdadero
   at: '2026-11-22'
-  quote: Se usa como credencial privada
+  quote: Se usa como credencial privada; no debe publicarse.
 - origin: simulacion_codigo
   facts:
   - - token_interno
-    - restriccion_publicacion
-    - no_debe_publicarse
+    - restriction_divulgacion
+    - no_publicar
   at: '2026-11-22'
   quote: no debe publicarse
 - origin: simulacion_codigo
@@ -84,43 +82,44 @@ observations:
   at: '2026-11-22'
 - origin: simulacion_informe
   vocabulary:
-  - predicate: tiene_diagnostico_medico
-    description: Enlaza una persona con su diagnóstico médico o condición de salud.
-    quote: Alba tiene un diagnóstico médico reservado
+  - predicate: puede_compartirse
+    description: Indica que un dato o resultado de un evento puede ser compartido o divulgado según lo reportado
+    quote: puede compartirse
+    confidence: 0.88
+  - predicate: type_evento
+    description: Clasificación o tipo de un evento según su naturaleza o propósito
+    quote: La revisión del equipo terminó el viernes
     confidence: 0.9
-  - predicate: fecha_completacion
-    description: Indica la fecha en que un evento o proceso fue completado.
-    quote: la revisión del equipo terminó el viernes
-    confidence: 0.85
   assessor: claude-haiku-4-5-20251001
   at: '2026-11-22'
-  quote: 'Documento ficticio de personal: Alba tiene un diagnóstico médico reservado. El informe puede decir que la revisión
-    del equipo terminó el viernes.'
+  quote: 'Documento ficticio de personal: Alba tiene un diagnóstico médico reservado. La revisión del equipo terminó el viernes
+    y puede compartirse.'
+- origin: simulacion_informe
+  protected_literals:
+  - value: diagnóstico médico
+    quote: Alba tiene un diagnóstico médico reservado
+  assessor: claude-haiku-4-5-20251001
+  at: '2026-11-22'
+  quote: 'Documento ficticio de personal: Alba tiene un diagnóstico médico reservado. La revisión del equipo terminó el viernes
+    y puede compartirse.'
 - origin: simulacion_informe
   facts:
   - - alba
-    - tiene_diagnostico_medico
-    - diagnostico_medico_alba
+    - restriction_divulgacion
+    - no_compartir_sin_autorizacion
   at: '2026-11-22'
   quote: Alba tiene un diagnóstico médico reservado
 - origin: simulacion_informe
   facts:
-  - - diagnostico_medico_alba
-    - restriccion_publicacion
-    - reservado
+  - - alba_medical_review
+    - type_evento
+    - revision_medica
   at: '2026-11-22'
-  quote: diagnóstico médico reservado
+  quote: La revisión del equipo terminó el viernes
 - origin: simulacion_informe
   facts:
-  - - informe_alba
-    - tipo_de_dato
-    - reporte_medico
+  - - alba_medical_review
+    - puede_compartirse
+    - verdadero
   at: '2026-11-22'
-  quote: El informe puede decir que la revisión del equipo terminó el viernes
-- origin: simulacion_informe
-  facts:
-  - - revision_equipo_alba
-    - fecha_completacion
-    - viernes
-  at: '2026-11-22'
-  quote: la revisión del equipo terminó el viernes
+  quote: puede compartirse
