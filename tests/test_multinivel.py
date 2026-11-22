@@ -453,3 +453,115 @@ class GeneralRuleTests(unittest.TestCase):
         self.assertEqual(guard.hypotheses("luis", DAY), [])
         self.assertNotIn(("x","q",YES),
                          [tuple(item["fact"]) for item in guard.model_context("luis", DAY)["possible_knowledge"]])
+
+
+def carbon_fixture(delivered=.75):
+    data, case, _ = fixture(depth=2, delivered=delivered)
+    data["chains"] = []
+    data["vocabulary"] = {
+        "release_state": "Estado temporal de lanzamiento de un producto.",
+        "product_kind": "Tipo de producto.",
+        "publisher": "Organización asociada al producto.",
+    }
+    data["families"] = {"google_model_release": {
+        "description": "Google lanzará un producto que es un modelo.",
+        "statuses": ["carbon"], "absolute": .75, "increase": .45,
+    }}
+    data["rules"] = [{
+        "when": [["?product", "release_state", "scheduled"],
+                 ["?product", "product_kind", "model"],
+                 ["?product", "publisher", "google"]],
+        "then": ["google", "google_model_release", "?product"],
+    }]
+    case.clauses = {
+        "launch": Clause(text="Va a salir Carbon.",
+                          facts=[("carbon", "release_state", "scheduled")], provides=["answer"]),
+        "model": Clause(text="Carbon es un modelo.",
+                         facts=[("carbon", "product_kind", "model")], provides=["answer"]),
+        "other_model": Clause(text="Cobalt es un modelo.",
+                              facts=[("cobalt", "product_kind", "model")], provides=["answer"]),
+    }
+    case.tasks = {name: Task(requires=["answer"], options=[Option(clauses=[name])])
+                  for name in case.clauses}
+    return Policy.model_validate(data), case
+
+
+class CumulativeDisclosureTests(unittest.TestCase):
+    def guard(self, public_to=("ana", "luis"), delivered=.75):
+        policy, case = carbon_fixture(delivered)
+        guard = Guard(":memory:", policy, case)
+        self.addCleanup(guard.close)
+        guard.observe([Observation(origin="private_launch_plan", at=DAY, facts=[
+            ("carbon", "release_state", "scheduled"),
+            ("carbon", "product_kind", "model"),
+            ("carbon", "publisher", "google"),
+            ("google", "google_model_release", "carbon"),
+            ("cobalt", "product_kind", "model"),
+        ])])
+        # The two quoted messages omit the publisher; this is prior, cited context.
+        for user in public_to:
+            guard.observe([Observation(origin="public_catalogue", at=DAY, user=user, grade="cited",
+                                      facts=[("carbon", "publisher", "google")])])
+        return guard
+
+    def test_cada_pista_sola_se_puede_entregar(self):
+        for task in ("launch", "model"):
+            with self.subTest(task=task):
+                guard = self.guard()
+                result = guard.run("ana", task, DAY, "single_" + task, strict=True)
+                self.assertEqual(result["action"], "allow")
+                self.assertEqual(guard.inbox("ana")[0]["text"], guard.render(guard.case.tasks[task].options[0]))
+
+    def test_dos_mensajes_distintos_completan_la_inferencia_y_retienen_el_segundo(self):
+        guard = self.guard()
+        first = guard.run("ana", "launch", DAY, "first_clue", strict=True)
+        self.assertEqual(first["action"], "allow")
+        self.assertEqual(guard.inbox("ana"), [{"id": "first_clue", "text": "Va a salir Carbon."}])
+
+        second = guard.run("ana", "model", DAY, "second_clue", strict=True)
+        self.assertEqual(second["action"], "review")
+        blocked = second["attempts"][0]["blocked"]
+        self.assertEqual([(item["subject"], item["family"], item["status"], item["direct"])
+                          for item in blocked], [("google", "google_model_release", "carbon", False)])
+        self.assertEqual(blocked[0]["before"], 0.0)
+        self.assertAlmostEqual(blocked[0]["after"], .75 * .75)
+        self.assertGreaterEqual(blocked[0]["after"] - blocked[0]["before"], .45)
+        self.assertEqual(guard.inbox("ana"), [{"id": "first_clue", "text": "Va a salir Carbon."}])
+
+    def test_el_orden_de_las_dos_pistas_no_cambia_la_inferencia(self):
+        guard = self.guard()
+        self.assertEqual(guard.run("ana", "model", DAY, "model_first", strict=True)["action"], "allow")
+        result = guard.run("ana", "launch", DAY, "launch_second", strict=True)
+        self.assertEqual(result["action"], "review")
+        self.assertEqual(result["attempts"][0]["blocked"][0]["family"], "google_model_release")
+
+    def test_menor_confianza_en_ambas_entregas_no_cruza_el_umbral_de_riesgo(self):
+        guard = self.guard(delivered=.60)
+        self.assertEqual(guard.run("ana", "launch", DAY, "release", strict=True)["action"], "allow")
+        result = guard.run("ana", "model", DAY, "type", strict=True)
+        self.assertEqual(result["action"], "allow")
+        self.assertAlmostEqual(result["attempts"][0]["changes"][0]["after"], .60 * .60)
+
+    def test_menciones_de_productos_distintos_no_se_unen_por_el_tipo_compartido(self):
+        guard = self.guard()
+        self.assertEqual(guard.run("ana", "launch", DAY, "carbon_release", strict=True)["action"], "allow")
+        result = guard.run("ana", "other_model", DAY, "cobalt_type", strict=True)
+        self.assertEqual(result["action"], "allow")
+        self.assertFalse(any(item["family"] == "google_model_release"
+                             for item in result["attempts"][0].get("changes", [])))
+
+    def test_el_historial_de_otro_destinatario_no_completa_la_premisa(self):
+        guard = self.guard()
+        self.assertEqual(guard.run("ana", "launch", DAY, "ana_release", strict=True)["action"], "allow")
+        result = guard.run("luis", "model", DAY, "luis_type", strict=True)
+        self.assertEqual(result["action"], "allow")
+        self.assertEqual(guard.inbox("luis"), [{"id": "luis_type", "text": "Carbon es un modelo."}])
+
+    def test_sin_el_vinculo_confiable_a_google_no_se_infiere_el_lanzamiento_de_google(self):
+        guard = self.guard(public_to=())
+        self.assertEqual(guard.run("ana", "launch", DAY, "release", strict=True)["action"], "allow")
+        result = guard.run("ana", "model", DAY, "type", strict=True)
+        self.assertEqual(result["action"], "allow")
+        self.assertNotIn(("google", "google_model_release", "carbon"),
+                         [(item["subject"], item["family"], item["status"])
+                          for item in result["attempts"][0].get("changes", [])])
