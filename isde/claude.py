@@ -4,6 +4,7 @@ import json
 import os
 import re
 from datetime import date
+from types import SimpleNamespace
 
 from typing import Annotated
 
@@ -177,6 +178,8 @@ def _request(role, context, schema, client, model, media=None):
         except ValidationError as exc:
             raise ValueError("Claude devolvió una salida JSON que no cumple la validación local") from exc
     blocks = [b for b in response.content if b.type == "tool_use" and b.name == "select_evidence"]
+    if len(blocks) > 1 and response.stop_reason == "tool_use" and all(isinstance(b.input, dict) for b in blocks):
+        blocks = [SimpleNamespace(input=merge_calls([b.input for b in blocks]))]
     if len(blocks) != 1 or response.stop_reason != "tool_use":
         raise ValueError("Claude no llamó select_evidence o no devolvió una selección completa"
                          f" (stop_reason={response.stop_reason}); se descartó la respuesta")
@@ -185,6 +188,20 @@ def _request(role, context, schema, client, model, media=None):
     except ValidationError as exc:
         # Model output is untrusted: reject it whole and never echo it back to the terminal.
         raise ValueError("Claude devolvió una selección con formato inválido") from exc
+
+
+def merge_calls(inputs):
+    """Join a selection split across several tool calls; every flag must hold in all of them (fail closed)."""
+    merged = {}
+    for data in inputs:
+        for key, value in data.items():
+            if key not in merged:
+                merged[key] = value
+            elif isinstance(value, list) and isinstance(merged[key], list):
+                merged[key] = merged[key] + value
+            elif isinstance(value, bool) and isinstance(merged[key], bool):
+                merged[key] = merged[key] and value
+    return merged
 
 
 def _anthropic_output_schema(node):
@@ -436,6 +453,13 @@ def leveled(policy, result):
         if level is None and entity.type in DATA_NODES:
             level = "interno"  # shortcut: an unstated datum defaults to internal use; the retry asks for a level first.
         entities.append(entity.model_copy(update={"confidentiality": level}))
+    # The variable that holds a protected value is its container, not the secret: TOKEN_X may be named freely.
+    secrets = {p.value for p in result.protected_literals}
+    values = {e.id for e in entities if e.label in secrets}
+    holders = {item.fact[0] for item in items if item.fact[2] in values}
+    entities = [e.model_copy(update={"confidentiality": "interno"})
+                if e.id in holders and e.id not in values and e.confidentiality in CONFIDENTIAL
+                and not any(secret in e.label for secret in secrets) else e for e in entities]
     return items, entities, levels, dropped
 
 
@@ -495,13 +519,18 @@ def propose(policy: Policy, source: Source, grade: Grade | None = None, *, graph
             unleveled = [e.id for e in result.entities if e.type in DATA_NODES and e.confidentiality is None]
             quotes += [p.quote for p in result.vocabulary] + [p.quote for p in result.rules]
             quotes += [p.quote for p in result.unrepresented_claims]
+            repaired = []
             for protected in result.protected_literals:
-                try:
-                    protected.validate_source(source.text)
-                    if protected.family != INTRINSIC_FAMILY:
-                        raise ValueError("La extracción no puede asignar permisos a valores protegidos")
-                except ValueError:
-                    invalid_literals = True
+                if not protected.value.strip() or protected.value not in source.text:
+                    invalid_literals = True  # Without the literal value there is nothing to protect or match.
+                    continue
+                # The value is the evidence: a drifted quote is rebuilt from it, and the model never picks a family
+                # that some role may receive, so the strictest one applies.
+                if protected.quote not in source.text or protected.value not in protected.quote:
+                    protected = protected.model_copy(update={"quote": protected.value})
+                repaired.append(protected.model_copy(update={"family": INTRINSIC_FAMILY}))
+            if not invalid_literals:
+                result.protected_literals = repaired
             defined = set(policy.vocabulary) | set(policy.families) | {p.predicate for p in result.vocabulary}
             used = {item.fact[1] for item in result.items if item.fact not in flagged}
             used.update(atom[1] for rule in result.rules for atom in [*rule.rule.when, rule.rule.then])

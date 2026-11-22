@@ -1,7 +1,9 @@
 """Local inbox is the delivery boundary. Decision details are operator-only."""
 import hashlib
 import json
+import re
 import sqlite3
+import unicodedata
 from collections import defaultdict
 from contextlib import contextmanager
 from datetime import date
@@ -10,9 +12,20 @@ from rdflib import RDF
 
 from .graphs import (E, P, R, V, describe, explain, internal_view, make_schema, observer_view, path_goals, plain,
                      probabilities, rdf_fact, role_graph, signature, user_grants, value_nodes)
-from .model import (CONFIDENTIAL, DATA_NODES, Case, INTRINSIC_FAMILY, Observation, ObserverEstimate, Policy, RuleProposal,
+from .model import (ACTOR_NODES, CONFIDENTIAL, Case, INTRINSIC_FAMILY, Observation, ObserverEstimate, Policy, RuleProposal,
                     intrinsic_family, stricter)
 from .privacy import RutProtection
+
+
+def fold_text(text):
+    # Some labels arrive as identifiers (ensayo_clinico); underscores read as spaces.
+    return " ".join(unicodedata.normalize("NFKD", text.replace("_", " ")).encode("ascii", "ignore").decode().split()).casefold()
+
+
+def mentions(label, text):
+    """Whole-word, accent- and case-insensitive match; labels under three characters would match anything."""
+    label = fold_text(label or "")
+    return len(label) >= 3 and re.search(r"(?<!\w)" + re.escape(label) + r"(?!\w)", fold_text(text)) is not None
 
 
 class Guard:
@@ -288,13 +301,39 @@ class Guard:
 
     def confidential_nodes(self):
         """Names (ids and aliases) of confidential data nodes, mapped to the node and the label a draft could quote."""
-        # Only a datum blocks by itself; a confidential person or organization stays an intrinsic-risk judgment.
+        # A confidential datum, codename or event blocks by itself; a confidential person or organization stays an
+        # intrinsic-risk judgment, or every reply that names them would be held.
         nodes = {node: label for node, kind, label, level in self.db.execute(
             "SELECT id,type,label,confidentiality FROM kg_nodes WHERE org=? AND op=?", self.scope)
-            if level in CONFIDENTIAL and kind in DATA_NODES}
+            if level in CONFIDENTIAL and kind not in ACTOR_NODES}
         names = {node: (node, label) for node, label in nodes.items()}
         return names | {alias: names[node] for alias, node in self.db.execute(
             "SELECT alias,id FROM kg_aliases WHERE org=? AND op=?", self.scope) if node in nodes}
+
+    def fingerprints(self, at, confidential):
+        """Non-public neighbours of each group of linked confidential nodes, with the label a draft could quote.
+
+        A secret spread over linked nodes (a vaccine and its trial) shares one fingerprint."""
+        stored = {node: (label, level) for node, label, level in self.db.execute(
+            "SELECT id,label,confidentiality FROM kg_nodes WHERE org=? AND op=?", self.scope)}
+        nodes = {node for node, _ in confidential.values()}
+        facts = [fact for _, fact, _ in self.records("", at)]
+        group = {node: node for node in nodes}
+
+        def root(node):
+            while group[node] != node:
+                node = group[node]
+            return node
+        for subject, _, value in facts:
+            if subject in nodes and value in nodes:
+                group[root(subject)] = root(value)
+        result = defaultdict(dict)
+        for subject, _, value in facts:
+            for node, other in ((subject, value), (value, subject)):
+                label, level = stored.get(other, (None, None))
+                if node in nodes and other not in nodes and level != "publico":
+                    result[root(node)][other] = label
+        return result
 
     def path_ratings(self):
         return dict(self.db.execute("SELECT signature,confidence FROM path_ratings WHERE org=? AND op=?", self.scope))
@@ -449,6 +488,7 @@ class Guard:
         _, allowed = user_grants(self.policy, role_graph(self.schema, self.case, at), user)
         restricted_literals = self.restricted_literals(user, at)
         confidential = self.confidential_nodes()
+        fingerprints = self.fingerprints(at, confidential)
         attempts = []
         options = list(task.options)
         if draft is not None:
@@ -475,14 +515,18 @@ class Guard:
                 attempts.append({"reason": "protected_literal"})
                 continue
             # A confidential datum is restricted for everyone, like an intrinsic secret: no role receives it.
-            named = {confidential[term][0] for fact in facts for term in (fact[0], fact[2]) if term in confidential}
-            # The text check covers a draft whose extracted facts missed the node; short labels would match anything.
-            folded = " ".join(text.split()).casefold()
-            named |= {node for node, label in confidential.values()
-                      if len(label) >= 4 and " ".join(label.split()).casefold() in folded}
-            named = sorted(named)
+            terms = {term for fact in facts for term in (fact[0], fact[2])}
+            named = {confidential[term][0] for term in terms if term in confidential}
+            # The text check covers a draft whose extracted facts missed the node.
+            named |= {node for node, label in confidential.values() if mentions(label, text)}
             if named:
-                attempts.append({"reason": "confidential_node", "nodes": named})
+                attempts.append({"reason": "confidential_node", "nodes": sorted(named)})
+                continue
+            # Two non-public traits of a secret reveal it without its name: "un fármaco que sale el próximo trimestre".
+            traced = sorted(node for node, traits in fingerprints.items()
+                            if len({t for t, label in traits.items() if t in terms or mentions(label, text)}) >= 2)
+            if traced:
+                attempts.append({"reason": "confidential_pattern", "nodes": traced})
                 continue
             privacy_reason = rut_protection.reason(text, facts)
             if privacy_reason:

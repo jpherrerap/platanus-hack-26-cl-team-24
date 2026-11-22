@@ -70,7 +70,12 @@ decir que X" o "X puede compartirse", no es una posibilidad incierta: registra X
 como hecho con su cita literal y no la incluyas en unrepresented_claims; su
 carácter público va en confidentiality de la entidad. No conviertas esa
 indicación en permisos. Un dato confidencial representado como entidad con
-confidentiality, y enlazado por un triple, cuenta como representado.
+confidentiality, y enlazado por un triple, cuenta como representado. Una
+prohibición de revelar algo ("está prohibido revelar que X es un fármaco") se
+representa con confidentiality de la entidad y los triples de lo prohibido
+([x, es_un, farmaco]); no la incluyas en unrepresented_claims. Una referencia
+temporal imprecisa también es un valor: "saldrá el próximo trimestre" se
+representa como [x, lanzamiento, proximo_trimestre].
 
 En protected_literals, registra los valores literales que la fuente identifica
 como confidenciales, por ejemplo el valor completo de una credencial privada.
@@ -129,6 +134,8 @@ Considera, cuando existan indicios:
   efectivamente las conoce o que esas relaciones están confirmadas.
 - Señales de formato, como posibles identificadores personales, sin concluir que
   un número pertenece a una persona solo por tener un formato parecido.
+- Nombrar una variable, campo o sistema sin su valor (por ejemplo "configura
+  TOKEN_X con el valor que te entreguen") no expone la credencial.
 
 Devuelve hipótesis individuales en el esquema de la herramienta. Cada claim es
 una terna con identificadores canónicos, predicado del vocabulario o de una
@@ -164,7 +171,10 @@ si es información de la organización sin marca especial; confidencial si es un
 dato personal, de salud, de remuneraciones, la fuente lo llama privado o
 reservado, o prohíbe comunicarlo a alguien ("no se comunica a proveedores"); restringido si es una credencial, contraseña, clave o la fuente lo
 llama secreto. Cualquier entidad puede llevar confidentiality si la fuente la
-califica, por ejemplo la identidad de un denunciante.
+califica, por ejemplo la identidad de un denunciante. El nombre clave de un
+proyecto secreto es un dato restringido: lo que la fuente prohíbe revelar sobre
+él (qué es, que se está trabajando en él) se representa con triples sobre esa
+entidad.
 
 Los triples enlazan entidades o valores: nunca uses como objeto verdadero,
 falso, sí, no, un nivel de confidencialidad (público, privado, confidencial,
@@ -172,7 +182,7 @@ secreto) ni una prohibición (no_publicar, no_compartir). Ese carácter va en
 confidentiality de la entidad, no en un triple. Por ejemplo, "la variable
 TOKEN_X contiene abc123, es privada" se representa con la entidad dato abc123
 restringido y el triple [token_x, contiene_valor, abc123]; el nombre TOKEN_X no
-es el secreto. Una relación real entre entidades, como [ana, aprobo, contrato_c9],
+es el secreto y su entidad es interno, no restringido. Una relación real entre entidades, como [ana, aprobo, contrato_c9],
 sí es un triple. Si la fuente dice que un dato no es confidencial, usa publico o
 interno según corresponda.
 

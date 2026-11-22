@@ -45,7 +45,13 @@ class ClaudeAnalysis:
                 + CANONICAL_IDS + " Reutiliza los predicados compatibles. Si falta una relación para un hecho del "
                 "borrador, defínela en vocabulary con descripción general, cita literal y confidence, y úsala en facts. "
                 "No redefinas predicados ni familias existentes.")
-        return retry_invalid(lambda correction: _request(role + correction, context, DraftFacts, None, None))
+        def ask(correction):
+            result = _request(role + correction, context, DraftFacts, None, None)
+            # A paraphrased quote gets the same single correction as a malformed selection.
+            if any(not item.quote.strip() or item.quote not in text for item in result.facts):
+                raise ValueError("Claude devolvió una cita que no es literal")
+            return result
+        return retry_invalid(ask)
 
     def adversarial(self, policy, text, view):
         return assess_hypotheses(policy, text, view, prompt=self.prompts["adversary"])

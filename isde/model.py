@@ -20,8 +20,12 @@ def fold_id(value):
     if not isinstance(value, str):
         return value
     folded = unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode().lower()
-    # Dates and amounts are values too, but an identifier must start with a letter.
-    return "v_" + folded if re.fullmatch(r"[0-9][a-z0-9_]*", folded) else folded
+    number = folded.lstrip("$€£ ")
+    if number[:1].isdigit():
+        # Amounts, percentages and dates are values; their punctuation carries no identity, unlike O-18.
+        number = re.sub(r"[^a-z0-9]+", "_", number.replace("%", "_pct")).strip("_")
+        return "v_" + number if re.fullmatch(r"[a-z0-9_]+", number) else folded
+    return folded
 
 
 def fold_ids(value):
@@ -42,6 +46,7 @@ Confidentiality = Literal["publico", "interno", "confidencial", "restringido"]
 LEVELS = ["publico", "interno", "confidencial", "restringido"]
 CONFIDENTIAL = {"confidencial", "restringido"}
 DATA_NODES = {"dato", "valor"}
+ACTOR_NODES = {"persona", "organizacion", "rol", "fuente"}
 BOOLEAN_FLAGS = {"verdadero", "verdadera", "falso", "falsa", "true", "false", "si", "no", "yes"}
 # Words that state confidentiality; as a triple object they label the subject, they are not a node.
 LEVEL_WORDS = {"publico": "publico", "publica": "publico", "interno": "interno", "interna": "interno",
@@ -51,7 +56,8 @@ LEVEL_WORDS = {"publico": "publico", "publica": "publico", "interno": "interno",
                "secreta": "restringido"}
 SHARE_WORDS = {"compartir", "compartirse", "compartible", "compartido", "publicar", "publicarse", "publicable",
                "publicado", "divulgar", "divulgarse", "divulgable", "comunicar", "comunicarse", "comunicado", "revelar",
-               "revelarse", "difundir", "difundirse", "enviar"}
+               "revelarse", "revelado", "difundir", "difundirse", "difundido", "divulgado", "enviar", "anunciar",
+               "anunciarse", "anunciado", "publicamente"}
 LEVEL_FILLER = {"informacion", "dato", "datos", "credencial", "uso", "solo", "de", "caracter", "muy", "altamente",
                 "estrictamente", "es", "y"}
 # Predicates about confidentiality itself; only there do "publico" or "interno" label the subject.
