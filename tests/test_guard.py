@@ -739,6 +739,31 @@ class DynamicVocabularyTests(unittest.TestCase):
 class SeededEventsTests(unittest.TestCase):
     @unittest.skipUnless(all(importlib.util.find_spec(n) for n in ("fastapi", "langgraph", "httpx")),
                          "Instala el extra api")
+    def test_recorded_intranet_drafts_are_decided_without_claude(self):
+        from fastapi.testclient import TestClient
+        from isde.api import create_app
+        from isde.semantic import RecordedReviews
+        recorded = {item.user + ":" + item.text.splitlines()[0]: item.text
+                    for item in RecordedReviews.load(ROOT / "demo-recorded.yaml").reviews}
+        claude = mock.Mock(side_effect=ValueError("sin Claude"))
+        with tempfile.TemporaryDirectory() as folder, mock.patch.dict(os.environ, {}, clear=True), \
+                mock.patch("isde.claude._request", claude), mock.patch("isde.semantic._request", claude):
+            client = TestClient(create_app(db=str(Path(folder) / "data.sqlite")))
+            def review(review_id, user, text):
+                return client.post("/v1/reviews", json={"review_id": review_id, "user": user, "task": "email",
+                                                        "day": "2026-11-22", "question": "Correo", "text": text})
+            lunch = recorded["ines:Asunto: Almuerzo"]
+            self.assertEqual(review("almuerzo", "ines", lunch).json()["status"], "approved")
+            self.assertEqual(client.post("/v1/reviews/almuerzo/deliver", json={"user": "ines"}).json()["action"], "allow")
+            for name in ("Datos para la nota de prensa", "Idea para el informe anual"):
+                self.assertEqual(review(name[:4], "luis", recorded["luis:Asunto: " + name]).json()["status"], "revise")
+            claude.assert_not_called()
+            # Only the exact recipient and text are recorded; anything else goes to Claude.
+            self.assertNotEqual(review("otro", "ana", lunch).status_code, 200)
+            claude.assert_called()
+
+    @unittest.skipUnless(all(importlib.util.find_spec(n) for n in ("fastapi", "langgraph", "httpx")),
+                         "Instala el extra api")
     def test_demo_notifications_load_settled_and_once(self):
         from fastapi.testclient import TestClient
         from isde.api import create_app

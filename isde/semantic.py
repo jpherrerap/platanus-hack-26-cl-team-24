@@ -6,7 +6,7 @@ from typing import TypedDict
 from langgraph.graph import END, START, StateGraph
 from pydantic import Field
 
-from .claude import CANONICAL_IDS, ModelOutput, ModelVocabulary, Source, _request, judge_secrets, assess_hypotheses, model_id, propose, read_path, retry_invalid
+from .claude import CANONICAL_IDS, Disclosure, ModelOutput, ModelVocabulary, Source, _request, judge_secrets, assess_hypotheses, model_id, propose, read_path, retry_invalid
 from .graphs import describe
 from .guard import Guard
 from .model import Clause, Hypothesis, INTRINSIC_FAMILY, Model, ModelTriple, Observation, Option, ProtectedLiteral, Task
@@ -34,9 +34,21 @@ class DraftAssessment(DraftFacts):
     has_factual_claims: bool = True
 
 
+class RecordedReview(Model):
+    user: str = Field(pattern=r"^[a-z][a-z0-9_]{0,95}$")
+    text: str = Field(min_length=1)
+    disclosures: list[Disclosure] = Field(default_factory=list, max_length=32)
+
+
+class RecordedReviews(Model):
+    reviews: list[RecordedReview]
+
+
 class ClaudeAnalysis:
-    def __init__(self, prompts=None):
+    def __init__(self, prompts=None, recorded=()):
         self.prompts = prompts if prompts is not None else dict(DEFAULT_PROMPTS)
+        # Recorded model outputs for exact demo drafts, keyed by recipient and text.
+        self.recorded = {(item.user, item.text): item for item in recorded}
 
     def analyze(self, policy, text, _question):
         context = {"text": text, "vocabulary": policy.vocabulary,
@@ -225,12 +237,19 @@ class ReviewState(TypedDict, total=False):
     result: dict
     extraction_error: bool
     disclosures: list
+    recorded: RecordedReview
 
 
 def inspect_graph(guard: Guard, model: ClaudeAnalysis):
     def extract(state):
         if state["task"] not in FREE_TASKS and state["task"] not in guard.case.tasks:
             raise ValueError("Tarea desconocida")
+        recorded = getattr(model, "recorded", {}).get((state["user"], state["text"]))
+        if recorded is not None:
+            # A recorded demo draft skips the Claude calls; Guard._decide still makes the decision.
+            return {"analysis": DraftFacts(facts=[]), "recorded": recorded,
+                    "context": guard.model_context(state["user"], state["day"]),
+                    "internal": guard.model_context(None, state["day"])}
         policy = guard.policy_at(state["day"])
         visible = guard.recipient_policy(state["user"], state["day"])
         policy = policy.model_copy(update={"vocabulary": {**visible.vocabulary, **policy.vocabulary}})
@@ -262,6 +281,8 @@ def inspect_graph(guard: Guard, model: ClaudeAnalysis):
                 "internal": guard.model_context(None, state["day"])}
 
     def adversary(state):
+        if "recorded" in state:
+            return {"hypotheses": []}
         policy = guard.recipient_policy(state["user"], state["day"])
         visible = {item.predicate: "Relación extraída del borrador visible."
                    for item in state["analysis"].vocabulary}
@@ -272,6 +293,8 @@ def inspect_graph(guard: Guard, model: ClaudeAnalysis):
         return {"hypotheses": hypotheses}
 
     def secrets(state):
+        if "recorded" in state:
+            return {"disclosures": [d.model_dump() for d in state["recorded"].disclosures]}
         judge = getattr(model, "secrets", None)
         briefs = guard.secret_briefs(state["day"])
         if judge is None or not briefs:
@@ -284,7 +307,7 @@ def inspect_graph(guard: Guard, model: ClaudeAnalysis):
 
     def paths(state):
         reader = getattr(model, "read_path", None)
-        if reader is None:
+        if reader is None or "recorded" in state:
             return {}
         extra = [item.fact for item in state["analysis"].facts] + [h.claim for h in state["hypotheses"]]
         # shortcut: reads at most 5 new paths per review; the rest keep policy.paths.weight until a later review.

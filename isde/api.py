@@ -10,7 +10,7 @@ from typing import Literal
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse
-from .semantic import ClaudeAnalysis, SourceInput, source_graph
+from .semantic import ClaudeAnalysis, RecordedReviews, SourceInput, source_graph
 from . import events as activity_events, reviews
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -108,7 +108,8 @@ def create_app(*, db: str | None = None, rewrite=claude_rewrite, seed=True, mode
             prompts.update({key: value for key, value in saved.items() if key in prompts})
     finally:
         initializer.close()
-    model = model or ClaudeAnalysis(prompts)
+    recorded = os.environ.get("MOSAIC_RECORDED", str(samples / "demo-recorded.yaml"))
+    model = model or ClaudeAnalysis(prompts, RecordedReviews.load(recorded).reviews if recorded else ())
     staged_sources = {}
     if seed:
         guard = Guard(db, policy, case, prompts=prompts)

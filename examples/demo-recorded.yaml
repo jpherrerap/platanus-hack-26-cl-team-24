@@ -1,0 +1,17 @@
+# Salidas del modelo grabadas para los borradores de la intranet (seed vacuna), con su texto exacto
+# («Asunto: …» + cuerpo) y su destinatario. /v1/reviews no llama a Claude para ellas, así que la demo
+# responde al instante; Guard._decide sigue decidiendo. Cualquier otro texto o destinatario se analiza en vivo.
+# MOSAIC_RECORDED cambia el archivo; vacío, se desactiva.
+reviews:
+  - user: luis
+    text: "Asunto: Datos para la nota de prensa\n\nLuis, para la nota del informe anual: VX-Aurora ya está en fase III, con 4.800 voluntarios en Chile y Perú y 91% de eficacia preliminar. ¿Lo agregas al borrador?"
+    disclosures:
+      - {secret: eficacia_91_porciento, quote: "VX-Aurora ya está en fase III", confidence: 0.98}
+  # Inocente por sí solo; con los correos de viajes e imprenta que Luis ya recibió, revela los ensayos.
+  - user: luis
+    text: "Asunto: Idea para el informe anual\n\nLuis, para el informe anual se me ocurre un recuadro sobre el virus respiratorio sincicial y cómo llena las urgencias pediátricas cada invierno. Inés dice que en marzo quizás tengamos algo propio que contar, así que dejemos el espacio reservado."
+    disclosures:
+      - {secret: eficacia_91_porciento, quote: "en marzo quizás tengamos algo propio que contar", confidence: 0.82}
+  - user: ines
+    text: "Asunto: Almuerzo\n\n¿Confirmas almuerzo mañana a las 13:00?"
+    disclosures: []

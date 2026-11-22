@@ -27,6 +27,7 @@ isde demo                                 # caso ficticio en memoria
 - `isde/serve.py`: demo visual local (stdlib `http.server`, solo vista previa).
 - `isde/cli.py`: CLI `isde` (`demo`, `serve`, `key`, `load`, `interpret`, `propose`, `preview`, `deliver`, `inbox`).
 - `examples/*.yaml`: política, caso, historial y fuentes de ejemplo (ficticios). Los tests los usan.
+- `examples/demo-recorded.yaml`: salidas del modelo grabadas para los borradores exactos de la intranet (por destinatario). `/v1/reviews` no llama a Claude para ellos, pero `Guard._decide` decide igual. `MOSAIC_RECORDED` cambia el archivo; vacío, lo desactiva.
 - `testbeds/alphacorp-intranet`: submódulo con la intranet ficticia (Node) que llama a la API; `.github/workflows/update-intranet.yml` lo actualiza cada 5 minutos. No se edita desde este repo.
 
 ## Invariantes
