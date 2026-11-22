@@ -13,7 +13,8 @@ from .model import Batch, Case, Policy
 ACTIONS = {"allow": ("PERMITIR", "32"), "repair": ("REPARAR", "33"), "review": ("REVISIÓN HUMANA", "31")}
 REASONS = {"unmapped_draft": "no coincide con ninguna respuesta del catálogo",
            "incomplete_task": "la alternativa no completa la tarea",
-           "unverified_content": "contiene hechos sin respaldo en el grafo interno"}
+           "unverified_content": "contiene hechos sin respaldo en el grafo interno",
+           "confidential_node": "nombra un dato confidencial del grafo interno"}
 # Installed wheels carry the examples as isde/examples; a source checkout keeps them at the repo root.
 HERE = Path(__file__).resolve().parent
 EXAMPLES = HERE / "examples" if (HERE / "examples").is_dir() else HERE.parent / "examples"
@@ -186,6 +187,8 @@ def main(argv=None):
             source = Source.load(args.file)
             visible = guard.policy_at(source.at) if source.user is None else guard.recipient_policy(source.user, source.at)
             events = propose(visible, source, args.grade, graph_context=guard.model_context(source.user, source.at))
+            for claim in events.unrepresented:
+                print("Sin representar: " + claim["quote"] + " (" + claim["reason"] + ")", file=sys.stderr)
             show(Batch(observations=events).model_dump(mode="json", exclude_none=True))
         elif args.command == "interpret":
             from .claude import Card, interpret

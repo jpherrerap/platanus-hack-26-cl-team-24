@@ -10,7 +10,8 @@ from rdflib import RDF
 
 from .graphs import (E, P, R, V, describe, explain, internal_view, make_schema, observer_view, path_goals, plain,
                      probabilities, rdf_fact, role_graph, signature, user_grants, value_nodes)
-from .model import Case, INTRINSIC_FAMILY, Observation, ObserverEstimate, Policy, RuleProposal, intrinsic_family
+from .model import (CONFIDENTIAL, DATA_NODES, Case, INTRINSIC_FAMILY, Observation, ObserverEstimate, Policy, RuleProposal,
+                    intrinsic_family, stricter)
 from .privacy import RutProtection
 
 
@@ -68,13 +69,15 @@ class Guard:
                 org TEXT, op TEXT, audience TEXT, request_id TEXT, task TEXT, draft_hash TEXT, day TEXT,
                 decision TEXT, PRIMARY KEY(org, op, audience, request_id));
             CREATE TABLE IF NOT EXISTS kg_nodes (
-                org TEXT, op TEXT, id TEXT, type TEXT, label TEXT, PRIMARY KEY(org, op, id));
+                org TEXT, op TEXT, id TEXT, type TEXT, label TEXT, confidentiality TEXT, PRIMARY KEY(org, op, id));
             CREATE TABLE IF NOT EXISTS kg_aliases (
                 org TEXT, op TEXT, alias TEXT, id TEXT, PRIMARY KEY(org, op, alias));
             CREATE TABLE IF NOT EXISTS path_ratings (
                 org TEXT, op TEXT, signature TEXT, relation TEXT, confidence REAL, assessor TEXT,
                 PRIMARY KEY(org, op, signature));
         """)
+        if "confidentiality" not in {row[1] for row in self.db.execute("PRAGMA table_info(kg_nodes)")}:
+            self.db.execute("ALTER TABLE kg_nodes ADD COLUMN confidentiality TEXT")
 
     @contextmanager
     def transaction(self):
@@ -163,8 +166,16 @@ class Guard:
                 if not observations:
                     return False
             resolve = self.resolver()
+            # A node named by a protected value is that secret, whatever level the extraction gave it.
+            secrets = {literal.value for event in observations for literal in event.protected_literals}
+            secrets |= {value for (value,) in self.db.execute(
+                "SELECT DISTINCT value FROM protected_literals WHERE org=? AND op=?", self.scope)}
             for event in observations:
                 for entity in event.entities:
+                    # The node must name the whole secret; "Banco" is not the secret "Banco Estado 1234".
+                    if any(" ".join(value.split()).casefold() in " ".join(entity.label.split()).casefold()
+                           for value in secrets if value.strip()):
+                        entity = entity.model_copy(update={"confidentiality": "restringido"})
                     self._register(entity, resolve)
             for event in sorted(observations, key=lambda event: not bool(event.vocabulary)):
                 for proposal in event.vocabulary:
@@ -256,10 +267,15 @@ class Guard:
 
     def _register(self, entity, resolve):
         node = resolve(entity.id)
+        previous = self.db.execute("SELECT confidentiality FROM kg_nodes WHERE org=? AND op=? AND id=?",
+                                   (*self.scope, node)).fetchone()
+        # A later source can raise a node's confidentiality but never lower it.
+        level = stricter(previous and previous[0], entity.confidentiality)
         self.db.execute("""
-            INSERT INTO kg_nodes VALUES (?,?,?,?,?)
-            ON CONFLICT(org,op,id) DO UPDATE SET type=CASE WHEN type='entidad' THEN excluded.type ELSE type END
-        """, (*self.scope, node, entity.type, entity.label))
+            INSERT INTO kg_nodes VALUES (?,?,?,?,?,?)
+            ON CONFLICT(org,op,id) DO UPDATE SET type=CASE WHEN type='entidad' THEN excluded.type ELSE type END,
+                confidentiality=excluded.confidentiality
+        """, (*self.scope, node, entity.type, entity.label, level))
         for alias in entity.aliases:
             # An alias that already names another node is ambiguous: keep both nodes instead of merging them.
             if alias == node or alias in resolve.aliases or alias in resolve.known:
@@ -269,6 +285,16 @@ class Guard:
 
     def labels(self):
         return dict(self.db.execute("SELECT id,label FROM kg_nodes WHERE org=? AND op=?", self.scope))
+
+    def confidential_nodes(self):
+        """Names (ids and aliases) of confidential data nodes, mapped to the node and the label a draft could quote."""
+        # Only a datum blocks by itself; a confidential person or organization stays an intrinsic-risk judgment.
+        nodes = {node: label for node, kind, label, level in self.db.execute(
+            "SELECT id,type,label,confidentiality FROM kg_nodes WHERE org=? AND op=?", self.scope)
+            if level in CONFIDENTIAL and kind in DATA_NODES}
+        names = {node: (node, label) for node, label in nodes.items()}
+        return names | {alias: names[node] for alias, node in self.db.execute(
+            "SELECT alias,id FROM kg_aliases WHERE org=? AND op=?", self.scope) if node in nodes}
 
     def path_ratings(self):
         return dict(self.db.execute("SELECT signature,confidence FROM path_ratings WHERE org=? AND op=?", self.scope))
@@ -315,11 +341,12 @@ class Guard:
                           "weight": min(cap, self.policy.evidence.get(grade, 1.))})
         facts = {(e["source"], e["predicate"], e["target"]) for e in edges}
         values = value_nodes(self.policy_at(at), facts)
-        stored = {node: (kind, label) for node, kind, label in
-                  self.db.execute("SELECT id,type,label FROM kg_nodes WHERE org=? AND op=?", self.scope)}
+        stored = {node: (kind, label, level) for node, kind, label, level in self.db.execute(
+            "SELECT id,type,label,confidentiality FROM kg_nodes WHERE org=? AND op=?", self.scope)}
         names = sorted({term for e in edges for term in (e["source"], e["target"])})
         nodes = [{"id": name, "type": "valor" if name in values else stored.get(name, ("entidad",))[0],
-                  "label": stored.get(name, (None, name))[1]} for name in names]
+                  "label": stored.get(name, (None, name))[1], "confidentiality": stored.get(name, (None, None, None))[2]}
+                 for name in names]
         return {"nodes": nodes, "edges": edges}
 
     def records(self, user, at):
@@ -371,12 +398,13 @@ class Guard:
                                str(o).removeprefix(str(E))) for s, p, o in potential
                               if str(p).startswith(str(P)) and (s, p, o) not in private)
             row = self.db.execute("SELECT revision FROM dashboard_config WHERE org=? AND op=?", self.scope).fetchone()
-            entities = [{"id": node, "type": kind, "label": label,
+            entities = [{"id": node, "type": kind, "label": label, "confidentiality": level,
                          "aliases": [a for (a,) in self.db.execute(
                              "SELECT alias FROM kg_aliases WHERE org=? AND op=? AND id=? ORDER BY alias",
                              (*self.scope, node))]}
-                        for node, kind, label in self.db.execute(
-                            "SELECT id,type,label FROM kg_nodes WHERE org=? AND op=? ORDER BY id", self.scope).fetchall()]
+                        for node, kind, label, level in self.db.execute(
+                            "SELECT id,type,label,confidentiality FROM kg_nodes WHERE org=? AND op=? ORDER BY id",
+                            self.scope).fetchall()]
             return {"kind": "internal", "facts": triples, "entities": entities, "proposed_rules": proposals,
                     "proposed_vocabulary": self.proposed_vocabulary(at),
                     "possible_inferences": inferred, "config_revision": row[0] if row else 0}
@@ -420,6 +448,7 @@ class Guard:
         baseline = probabilities(risk_policy, observer_view(records, historical), secrets, ratings)
         _, allowed = user_grants(self.policy, role_graph(self.schema, self.case, at), user)
         restricted_literals = self.restricted_literals(user, at)
+        confidential = self.confidential_nodes()
         attempts = []
         options = list(task.options)
         if draft is not None:
@@ -444,6 +473,16 @@ class Guard:
             text = " ".join(c.text for c in clauses)
             if any(value in text for value in restricted_literals):
                 attempts.append({"reason": "protected_literal"})
+                continue
+            # A confidential datum is restricted for everyone, like an intrinsic secret: no role receives it.
+            named = {confidential[term][0] for fact in facts for term in (fact[0], fact[2]) if term in confidential}
+            # The text check covers a draft whose extracted facts missed the node; short labels would match anything.
+            folded = " ".join(text.split()).casefold()
+            named |= {node for node, label in confidential.values()
+                      if len(label) >= 4 and " ".join(label.split()).casefold() in folded}
+            named = sorted(named)
+            if named:
+                attempts.append({"reason": "confidential_node", "nodes": named})
                 continue
             privacy_reason = rut_protection.reason(text, facts)
             if privacy_reason:
