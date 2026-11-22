@@ -898,13 +898,18 @@ class ConfidentialityTests(unittest.TestCase):
         from isde.semantic import ClaudeAnalysis, DraftFacts
         text = "La eficacia preliminar de VX-Aurora es de 91%."
         paraphrased = DraftFacts(facts=[{"fact":["vx_aurora", "eficacia", "91%"], "quote":"eficacia del 91 %"}])
-        literal = DraftFacts(facts=[{"fact":["vx_aurora", "eficacia", "91%"], "quote":"es de 91%"}])
+        concept = [{"predicate":"eficacia", "description":"Eficacia medida", "quote":"eficacia", "confidence":.9}]
+        literal = DraftFacts(facts=[{"fact":["vx_aurora", "eficacia", "91%"], "quote":"es de 91%"}], vocabulary=concept)
         self.assertEqual(literal.facts[0].fact[2], "v_91_pct")
         with mock.patch("isde.semantic._request", side_effect=[paraphrased, literal]):
             self.assertEqual(ClaudeAnalysis().analyze(self.policy, text, "q"), literal)
         with mock.patch("isde.semantic._request", side_effect=[paraphrased, paraphrased]):
             with self.assertRaisesRegex(ValueError, "no es literal"):
                 ClaudeAnalysis().analyze(self.policy, text, "q")
+        undefined = DraftFacts(facts=[{"fact":["vx_aurora", "eficacia_sin_definir", "91%"], "quote":"es de 91%"}])
+        with mock.patch("isde.semantic._request", side_effect=[undefined, literal]) as request:
+            self.assertEqual(ClaudeAnalysis().analyze(self.policy, text, "q"), literal)
+        self.assertEqual(request.call_count, 2)
 
     def test_messy_model_output_is_folded_instead_of_discarded(self):
         from isde.claude import InternalSuggestions
@@ -950,6 +955,60 @@ class ConfidentialityTests(unittest.TestCase):
         self.assertEqual(decide("La clave es otra.", [("router", "clave", "clave_wifi")])["reason"], "confidential_node")
         self.assertEqual(decide("La clave del wifi es HUNTER2.", [])["nodes"], ["hunter2"])
         self.assertNotEqual(decide("Alba llega el lunes.", []).get("reason"), "confidential_node")
+
+    def secret_graph(self):
+        self.guard.observe([
+            Observation(origin="s", at=DAY, entities=[
+                Entity(id="obo", type="dato", label="Obo", confidentiality="restringido"),
+                Entity(id="ensayo_obo", type="evento", label="ensayo de Obo", confidentiality="confidencial"),
+                Entity(id="farmaco", type="valor", label="fármaco", confidentiality="interno")]),
+            Observation(origin="s", at=DAY, facts=[("obo", "tipo", "farmaco"), ("obo", "probado_en", "ensayo_obo")],
+                        quote="tipo probado_en", vocabulary=[
+                            {"predicate":p, "description":"Relación " + p, "quote":p, "confidence":.9}
+                            for p in ("tipo", "probado_en")])])
+
+    def test_secret_briefs_group_linked_secrets_with_their_sentences(self):
+        self.secret_graph()
+        self.assertEqual(self.guard.secret_briefs(DAY), [{
+            "id": "ensayo_obo", "nombres": ["ensayo de Obo", "Obo"],
+            "hechos": ["Obo probado en ensayo de Obo", "Obo tipo fármaco"]}])
+        self.assertEqual(Guard(":memory:", self.policy, self.case).secret_briefs(DAY), [])
+
+    def test_judged_disclosure_holds_the_draft_and_its_failure_fails_closed(self):
+        from isde.claude import Disclosures, judge_secrets
+        from isde.semantic import DraftFacts, inspect_graph
+        self.secret_graph()
+        text = "El laboratorio lanza un medicamento nuevo pronto."
+        briefs = self.guard.secret_briefs(DAY)
+        invented = Disclosures(disclosures=[{"secret":"otro", "quote":"medicamento nuevo", "confidence":.9}])
+        found = Disclosures(disclosures=[{"secret":"ensayo_obo", "quote":"medicamento nuevo", "confidence":.8}])
+        with mock.patch("isde.claude._request", side_effect=[invented, found]) as request:
+            self.assertEqual([d.secret for d in judge_secrets(briefs, text, [])], ["ensayo_obo"])
+        self.assertIn("secretos", request.call_args.args[1])
+        with mock.patch("isde.claude._request", side_effect=[invented, invented]):
+            with self.assertRaisesRegex(ValueError, "secreto desconocido"):
+                judge_secrets(briefs, text, [])
+
+        class Model:
+            def __init__(self, judged):
+                self.judged = judged
+            def analyze(self, policy, text, question):
+                return DraftFacts(facts=[])
+            def adversarial(self, policy, text, view):
+                return []
+            def secrets(self, secrets, text, history):
+                if isinstance(self.judged, Exception):
+                    raise self.judged
+                return [d for d in found.disclosures if d.confidence >= self.judged]
+        def review(model):
+            state = {"user":"usuario_demo", "task":"freeform", "question":"q", "day":DAY, "text":text}
+            return inspect_graph(self.guard, model).invoke(state)["result"]
+        result = review(Model(0))
+        self.assertEqual(result["attempts"][-1], {"reason":"confidential_inference", "nodes":["ensayo_obo"]})
+        self.assertEqual(result["evidence"]["secret_disclosures"][0]["secret"], "ensayo_obo")
+        self.assertEqual(review(Model(.9))["action"], "allow")  # Nothing judged: the draft passes.
+        with self.assertRaisesRegex(ValueError, "sin conexión"):
+            review(Model(ValueError("sin conexión")))
 
     def test_existing_database_gains_the_confidentiality_column(self):
         import sqlite3

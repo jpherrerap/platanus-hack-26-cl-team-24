@@ -6,7 +6,7 @@ from typing import TypedDict
 from langgraph.graph import END, START, StateGraph
 from pydantic import Field
 
-from .claude import CANONICAL_IDS, ModelOutput, ModelVocabulary, Source, _request, assess_hypotheses, model_id, propose, read_path, retry_invalid
+from .claude import CANONICAL_IDS, ModelOutput, ModelVocabulary, Source, _request, judge_secrets, assess_hypotheses, model_id, propose, read_path, retry_invalid
 from .graphs import describe
 from .guard import Guard
 from .model import Clause, Hypothesis, INTRINSIC_FAMILY, Model, ModelTriple, Observation, Option, ProtectedLiteral, Task
@@ -50,6 +50,9 @@ class ClaudeAnalysis:
             # A paraphrased quote gets the same single correction as a malformed selection.
             if any(not item.quote.strip() or item.quote not in text for item in result.facts):
                 raise ValueError("Claude devolvió una cita que no es literal")
+            defined = policy.vocabulary.keys() | policy.families.keys() | {c.predicate for c in result.vocabulary}
+            if any(item.fact[1] not in defined for item in result.facts):
+                raise ValueError("Claude devolvió una relación sin definir")
             return result
         return retry_invalid(ask)
 
@@ -62,6 +65,9 @@ class ClaudeAnalysis:
 
     def read_path(self, policy, goal, sentences):
         return read_path(policy, goal, sentences)
+
+    def secrets(self, secrets, text, history):
+        return judge_secrets(secrets, text, history)
 
 
 class SourceInput(Model):
@@ -218,6 +224,7 @@ class ReviewState(TypedDict, total=False):
     internal: dict
     result: dict
     extraction_error: bool
+    disclosures: list
 
 
 def inspect_graph(guard: Guard, model: ClaudeAnalysis):
@@ -264,6 +271,15 @@ def inspect_graph(guard: Guard, model: ClaudeAnalysis):
             item.validate_source(policy, state["text"])
         return {"hypotheses": hypotheses}
 
+    def secrets(state):
+        judge = getattr(model, "secrets", None)
+        briefs = guard.secret_briefs(state["day"])
+        if judge is None or not briefs:
+            return {"disclosures": []}
+        history = [message["text"] for message in state["context"].get("delivered_messages", [])]
+        # A judge failure propagates: the review fails closed instead of approving unchecked.
+        return {"disclosures": [d.model_dump() for d in judge(briefs, state["text"], history)]}
+
     def paths(state):
         reader = getattr(model, "read_path", None)
         if reader is None:
@@ -287,6 +303,7 @@ def inspect_graph(guard: Guard, model: ClaudeAnalysis):
         result, _ = score_candidate(guard, state)
         result["evidence"] = {
             "candidate": [item.model_dump(mode="json") for item in state["analysis"].facts],
+            "secret_disclosures": state.get("disclosures", []),
             "recipient_history": [{"origin": origin, "fact": fact, "p_known": weight}
                                   for origin, fact, weight in guard.records(state["user"], state["day"])],
         }
@@ -295,11 +312,13 @@ def inspect_graph(guard: Guard, model: ClaudeAnalysis):
     graph = StateGraph(ReviewState)
     graph.add_node("extract", extract)
     graph.add_node("adversary", adversary)
+    graph.add_node("secrets", secrets)
     graph.add_node("paths", paths)
     graph.add_node("score", score)
     graph.add_edge(START, "extract")
     graph.add_edge("extract", "adversary")
-    graph.add_edge("adversary", "paths")
+    graph.add_edge("adversary", "secrets")
+    graph.add_edge("secrets", "paths")
     graph.add_edge("paths", "score")
     graph.add_edge("score", END)
     return graph.compile()
@@ -315,8 +334,10 @@ def score_candidate(guard, state):
                                             options=[Option(clauses=["mosaic_candidate"])])
     guard.case = candidate
     try:
+        # shortcut: confidence 0.5 is an uncalibrated cut; a judged disclosure below it is kept only in the trace.
+        disclosed = {d["secret"] for d in state.get("disclosures", []) if d["confidence"] >= .5}
         return guard._decide(state["user"], "mosaic_check", state["day"], state["text"],
                                    {state["text"]: state["hypotheses"]}, model_id(), strict=True,
-                                   verify_all_facts=False)
+                                   verify_all_facts=False, disclosed=disclosed)
     finally:
         guard.case = original

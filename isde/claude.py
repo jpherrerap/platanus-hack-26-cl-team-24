@@ -14,7 +14,8 @@ from .privacy import rut_format_signals
 from .model import (CONFIDENTIAL, DATA_NODES, Entity, Grade, Hypothesis, Id, INTRINSIC_FAMILY, Model, ModelId, NodeType, Observation,
                     Policy, Probability, ModelTriple, ProtectedLiteral, Rule, RuleAtom, RuleProposal, Triple,
                     VocabularyProposal, flag_level, fold_id, fold_ids, intrinsic_family, stricter)
-from .prompts import ADVERSARIAL_PROMPT, ENTITY_INSTRUCTION, INTERNAL_ONTOLOGY_PROMPT, PATH_PROMPT, SOURCE_COVERAGE_INSTRUCTION
+from .prompts import (ADVERSARIAL_PROMPT, ENTITY_INSTRUCTION, INTERNAL_ONTOLOGY_PROMPT, PATH_PROMPT, SECRET_PROMPT,
+                      SOURCE_COVERAGE_INSTRUCTION)
 
 
 class Snippet(Model):
@@ -400,6 +401,29 @@ def assess_hypotheses(policy, text, graph_context, *, client=None, model=None, p
         for h in hypotheses:
             h.validate_source(policy, text)
         return hypotheses
+    return retry_invalid(ask)
+
+
+class Disclosure(Model):
+    secret: Id
+    quote: str = Field(min_length=1)
+    confidence: Probability
+
+
+class Disclosures(ModelOutput):
+    disclosures: list[Disclosure] = Field(default_factory=list, max_length=32)
+
+
+def judge_secrets(secrets, text, history, *, client=None, model=None):
+    """Which internal secrets a draft reveals without naming them; an internal judgment, never shown to the recipient."""
+    known = {secret["id"] for secret in secrets}
+    context = {"secretos": secrets, "historial_entregado": history, "borrador": text}
+
+    def ask(correction):
+        found = _request(SECRET_PROMPT + correction, context, Disclosures, client, model).disclosures
+        if any(d.secret not in known or not d.quote.strip() or d.quote not in text for d in found):
+            raise ValueError("Claude devolvió un secreto desconocido o una cita que no es literal")
+        return found
     return retry_invalid(ask)
 
 

@@ -26,6 +26,7 @@ MESSAGE_TITLES = {"allow": "Se entregó una respuesta sin cambios",
 def blocked_disclosure(result):
     return any(attempt.get("blocked") or attempt.get("reason") in {
         "personal_identifier", "personal_identifier_link", "protected_literal", "confidential_node",
+        "confidential_inference",
     } for attempt in result.get("attempts", []))
 
 
