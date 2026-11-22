@@ -1,0 +1,13 @@
+# Caso por defecto más el directorio de la intranet de AlphaCorp (INTRANET_SEED=vacuna).
+# Usa la política y el historial por defecto, que ya traen la ontología de la vacuna VX-Aurora.
+org: organizacion_demo
+operation: operacion_demo
+assignments:
+  - {user: usuario_demo, role: usuario, org: organizacion_demo, operation: operacion_demo, start: 2000-01-01}
+  - {user: revisor_demo, role: revisor, org: organizacion_demo, operation: operacion_demo, start: 2000-01-01}
+  - {user: ana, role: usuario, org: organizacion_demo, operation: operacion_demo, start: 2000-01-01}
+  - {user: luis, role: usuario, org: organizacion_demo, operation: operacion_demo, start: 2000-01-01}
+  - {user: ines, role: usuario, org: organizacion_demo, operation: operacion_demo, start: 2000-01-01}
+  - {user: sofia, role: revisor, org: organizacion_demo, operation: operacion_demo, start: 2000-01-01}
+clauses: {}
+tasks: {}
