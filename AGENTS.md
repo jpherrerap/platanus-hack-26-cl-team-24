@@ -2,6 +2,8 @@
 
 Guardrail que revisa la respuesta de un agente antes de entregarla. Estima con ProbLog cuánto subiría la probabilidad de que el destinatario deduzca una conclusión protegida, combinando un grafo RDF/OWL interno con la evidencia de lo que el destinatario ya pudo saber. Descripción completa en `docs/isde.md`.
 
+Despliegues (Render, plan gratuito): panel y API en https://mosaic-7uf1.onrender.com; intranet de prueba de AlphaCorp en https://alphacorp-intranet.onrender.com.
+
 ## Comandos
 
 ```bash
@@ -17,12 +19,15 @@ isde demo                                 # caso ficticio en memoria
 - `isde/model.py`: contratos Pydantic (`Policy`, `Case`, `Observation`, `Batch`). `extra="forbid"`. Los IDs siguen `^[a-z][a-z0-9_]{0,95}$`.
 - `isde/graphs.py`: esquema OWL, roles vigentes por fecha, vista interna, vista del observador, búsqueda de caminos entre los extremos de un secreto (`find_paths`, `explain`) y probabilidades con ProbLog.
 - `isde/guard.py`: `Guard` con SQLite. `observe` registra evidencia, `_decide` elige la alternativa y `run` confirma la entrega en una sola transacción. `inbox` es lo único que ve el destinatario.
-- `isde/claude.py`: `interpret` y `propose`. Claude responde con una herramienta forzada y el código valida cada resultado.
+- `isde/privacy.py`: identificadores personales chilenos (RUT) confidenciales por defecto.
+- `isde/claude.py`: `interpret`, `propose` y `judge_secrets`. Claude responde con una herramienta forzada y el código valida cada resultado.
+- `isde/prompts.py`: prompts iniciales de los agentes, editables desde el panel.
 - `isde/media.py`: adjuntos de `/v1/messages` y `/v1/reviews` (el panel). Imágenes y PDF se transcriben con Claude y audio con ElevenLabs Scribe (`ELEVENLABS_API_KEY`, `ISDE_STT_MODEL`). Sin ElevenLabs, todo audio se rechaza sin error (`review` o `rejected`). Un mensaje con adjuntos nunca se reescribe: si no es admisible, va a `review`; en el panel, la reformulación se envía sin adjuntos.
 - `isde/api.py`: API HTTP (FastAPI). `workflow.py`, `semantic.py` y `reviews.py` implementan `/v1/messages` y `/v1/reviews`; `events.py` y `dashboard.py`, el panel. Las ediciones de `/v1/demo/*` no piden autenticación: la API es solo para uso local.
 - `isde/serve.py`: demo visual local (stdlib `http.server`, solo vista previa).
 - `isde/cli.py`: CLI `isde` (`demo`, `serve`, `key`, `load`, `interpret`, `propose`, `preview`, `deliver`, `inbox`).
 - `examples/*.yaml`: política, caso, historial y fuentes de ejemplo (ficticios). Los tests los usan.
+- `testbeds/alphacorp-intranet`: submódulo con la intranet ficticia (Node) que llama a la API; `.github/workflows/update-intranet.yml` lo actualiza cada 5 minutos. No se edita desde este repo.
 
 ## Invariantes
 
