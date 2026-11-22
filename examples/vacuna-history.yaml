@@ -1,0 +1,186 @@
+# Solo el escenario de la vacuna VX-Aurora, extraído de mvp-history.yaml. Úsalo con MOSAIC_HISTORY y una base nueva.
+# Incluye las definiciones de relaciones que la vacuna reutiliza de otras fuentes, con su origen.
+observations:
+- origin: simulacion_codigo
+  vocabulary:
+  - predicate: uso
+    description: Enlaza una entidad (sujeto) con su propósito o función declarada (objeto).
+    quote: Se usa como credencial privada
+    confidence: 0.95
+  assessor: claude-haiku-4-5-20251001
+  at: '2026-11-22'
+  quote: En un proyecto ficticio, la variable TOKEN_INTERNO contiene DEMO_TOKEN_NO_VALIDO_123. Se usa como credencial privada;
+    no debe publicarse.
+- origin: simulacion_farmaco
+  vocabulary:
+  - predicate: es_un
+    description: Enlaza una entidad (sujeto) con su clasificación o tipo (objeto).
+    quote: Obo es el nombre clave de un fármaco ultrasecreto
+    confidence: 0.98
+  assessor: claude-haiku-4-5-20251001
+  at: '2026-11-22'
+  quote: 'Memo interno ficticio de Laboratorios Quintral: Obo es el nombre clave de un fármaco ultrasecreto que saldrá al
+    mercado el próximo trimestre. El equipo de I+D trabaja en Obo desde 2024. Está prohibido revelar que Obo es un fármaco
+    o que se está trabajando en él.'
+- origin: simulacion_vacuna
+  entities:
+  - id: vx_aurora
+    type: dato
+    label: VX-Aurora
+    aliases:
+    - vacuna_vx_aurora
+    confidentiality: restringido
+  - id: vacuna
+    type: valor
+    label: vacuna
+    confidentiality: interno
+  - id: contra_virus_sincicial
+    type: valor
+    label: contra el virus respiratorio sincicial
+    aliases:
+    - virus_respiratorio_sincicial
+    confidentiality: interno
+  - id: fase_iii
+    type: valor
+    label: fase III
+    confidentiality: interno
+  - id: en_curso
+    type: valor
+    label: en curso
+    confidentiality: interno
+  - id: chile
+    type: valor
+    label: Chile
+    confidentiality: publico
+  - id: peru
+    type: valor
+    label: Perú
+    confidentiality: publico
+  - id: v_4800_voluntarios
+    type: dato
+    label: 4.800 voluntarios
+    aliases:
+    - cantidad_voluntarios_4800
+    confidentiality: confidencial
+  - id: eficacia_91_porciento
+    type: dato
+    label: 91% de eficacia
+    aliases:
+    - eficacia_preliminar_91
+    confidentiality: confidencial
+  - id: biovacunas_del_sur
+    type: organizacion
+    label: Biovacunas del Sur
+    confidentiality: publico
+  - id: ensayos_vx_aurora
+    type: dato
+    label: ensayos_vx_aurora
+    confidentiality: restringido
+  - id: ensayo_clinico
+    type: dato
+    label: ensayo_clinico
+    confidentiality: interno
+  assessor: claude-haiku-4-5-20251001
+  at: '2026-11-22'
+- origin: simulacion_vacuna
+  vocabulary:
+  - predicate: fase
+    description: Enlaza un evento de ensayo clínico (sujeto) con su fase o etapa de desarrollo (objeto).
+    quote: ensayos clínicos de fase III en curso
+    confidence: 0.95
+  - predicate: estado
+    description: Enlaza un evento o proceso (sujeto) con su estado actual (objeto).
+    quote: ensayos clínicos de fase III en curso
+    confidence: 0.95
+  - predicate: ubicacion
+    description: Enlaza un evento o actividad (sujeto) con la localidad geográfica donde se realiza (objeto).
+    quote: con 4.800 voluntarios en Chile y Perú
+    confidence: 0.95
+  - predicate: cantidad_voluntarios
+    description: Enlaza un ensayo clínico (sujeto) con el número de participantes voluntarios (objeto).
+    quote: con 4.800 voluntarios en Chile y Perú
+    confidence: 0.95
+  - predicate: eficacia_preliminar
+    description: Enlaza un evento de ensayo clínico (sujeto) con el porcentaje de eficacia observado en resultados previos
+      (objeto).
+    quote: Los resultados preliminares muestran 91% de eficacia
+    confidence: 0.95
+  - predicate: estudiado_en
+    description: Enlaza un producto o sustancia (sujeto) con el ensayo o investigación en el que participa (objeto).
+    quote: está en ensayos clínicos de fase III
+    confidence: 0.95
+  assessor: claude-haiku-4-5-20251001
+  at: '2026-11-22'
+  quote: 'Informe confidencial ficticio de Biovacunas del Sur: la vacuna VX-Aurora contra el virus respiratorio sincicial
+    está en ensayos clínicos de fase III en curso, con 4.800 voluntarios en Chile y Perú. Los resultados preliminares muestran
+    91% de eficacia. La existencia de los ensayos no se ha anunciado y no debe comunicarse.'
+- origin: simulacion_vacuna
+  facts:
+  - - vx_aurora
+    - es_un
+    - vacuna
+  at: '2026-11-22'
+  quote: la vacuna VX-Aurora contra el virus respiratorio sincicial
+- origin: simulacion_vacuna
+  facts:
+  - - vx_aurora
+    - uso
+    - contra_virus_sincicial
+  at: '2026-11-22'
+  quote: la vacuna VX-Aurora contra el virus respiratorio sincicial
+- origin: simulacion_vacuna
+  facts:
+  - - ensayos_vx_aurora
+    - es_un
+    - ensayo_clinico
+  at: '2026-11-22'
+  quote: está en ensayos clínicos de fase III
+- origin: simulacion_vacuna
+  facts:
+  - - ensayos_vx_aurora
+    - fase
+    - fase_iii
+  at: '2026-11-22'
+  quote: ensayos clínicos de fase III en curso
+- origin: simulacion_vacuna
+  facts:
+  - - ensayos_vx_aurora
+    - estado
+    - en_curso
+  at: '2026-11-22'
+  quote: ensayos clínicos de fase III en curso
+- origin: simulacion_vacuna
+  facts:
+  - - ensayos_vx_aurora
+    - ubicacion
+    - chile
+  at: '2026-11-22'
+  quote: con 4.800 voluntarios en Chile y Perú
+- origin: simulacion_vacuna
+  facts:
+  - - ensayos_vx_aurora
+    - ubicacion
+    - peru
+  at: '2026-11-22'
+  quote: con 4.800 voluntarios en Chile y Perú
+- origin: simulacion_vacuna
+  facts:
+  - - ensayos_vx_aurora
+    - cantidad_voluntarios
+    - v_4800_voluntarios
+  at: '2026-11-22'
+  quote: con 4.800 voluntarios en Chile y Perú
+- origin: simulacion_vacuna
+  facts:
+  - - ensayos_vx_aurora
+    - eficacia_preliminar
+    - eficacia_91_porciento
+  at: '2026-11-22'
+  quote: Los resultados preliminares muestran 91% de eficacia
+- origin: simulacion_vacuna
+  facts:
+  - - vx_aurora
+    - estudiado_en
+    - ensayos_vx_aurora
+  at: '2026-11-22'
+  quote: está en ensayos clínicos de fase III
