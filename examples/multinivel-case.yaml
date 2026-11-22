@@ -2,6 +2,7 @@ org: toy_org
 operation: toy
 assignments:
   - {user: ana, role: reader, org: toy_org, operation: toy, start: 2026-01-01}
+names: {ana: Ana}
 clauses:
   claim_a:
     text: a

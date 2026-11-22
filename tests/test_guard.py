@@ -1170,6 +1170,7 @@ class GenericSecretTests(unittest.TestCase):
             config = client.get("/v1/demo/config").json()
             self.assertEqual(config["families"], {})
             self.assertEqual(config["users"], ["revisor_demo", "usuario_demo"])
+            self.assertEqual(config["names"], {})
             self.assertNotIn("offer_status", str(config))
             self.assertIn("Cualquier valor", client.get("/").text)
             self.assertEqual(client.put("/v1/demo/vocabulary/actividad", json={"description":"Actividad"}).status_code, 200)
@@ -1921,21 +1922,21 @@ class DemoTests(unittest.TestCase):
 
     def test_demo_tells_the_story(self):
         text = self.demo()
-        luis = text[text.index("━━ luis"):text.index("sofia · ")]
+        luis = text[text.index("━━ Luis"):text.index("Sofía · ")]
         for line in ("Contexto\n   ya pudo saber (98%): o17 · signature = signed",
                      "P(betaai · offer_status = signed) 0% → 74%", "RETENIDO", "decisión: REPARAR",
                      "Bandeja de entrada\n   «El trámite vence el viernes.»\n"):
             self.assertIn(line, luis)
         # Allowed answers stay compact so the two interventions are what the audience reads.
-        self.assertIn("\nana · vendor → PERMITIR\n", text)
-        self.assertIn("sofia · legal, senior_legal → PERMITIR\n   su rol puede recibir: offer_status", text)
+        self.assertIn("\nAna · vendor → PERMITIR\n", text)
+        self.assertIn("Sofía · legal, senior_legal → PERMITIR\n   su rol puede recibir: offer_status", text)
         self.assertIn("0% → 11%", text)
-        ana = text[text.index("━━ ana"):text.index("\nluis · vendor → PERMITIR")]
+        ana = text[text.index("━━ Ana"):text.index("\nLuis · vendor → PERMITIR")]
         for line in ("ya pudo saber (75%): o17 · counterparty = betaai", "0% → 56%", "decisión: REVISIÓN HUMANA",
                      "Bandeja de entrada (sin cambios)\n   «El trámite vence el viernes. El expediente O-17 corresponde a BetaAI.»"):
             self.assertIn(line, ana)
-        self.assertIn("Resumen\n   turno 1 «due»: ana PERMITIR · luis REPARAR · sofia PERMITIR · ines PERMITIR\n"
-                      "   turno 2 «record»: ana REVISIÓN HUMANA · luis PERMITIR\n", text)
+        self.assertIn("Resumen\n   turno 1 «due»: Ana PERMITIR · Luis REPARAR · Sofía PERMITIR · Inés PERMITIR\n"
+                      "   turno 2 «record»: Ana REVISIÓN HUMANA · Luis PERMITIR\n", text)
         self.assertNotIn("\033[", text)
         # Readable on a default 80-column terminal.
         self.assertLessEqual(max(map(len, text.splitlines())), 80)
@@ -1965,7 +1966,7 @@ class CliTests(unittest.TestCase):
         self.addCleanup(os.chdir, cwd)
         code, out, _ = self.cli("demo")
         self.assertEqual(code, 0)
-        self.assertIn("ines · procurement → PERMITIR", out)
+        self.assertIn("Inés · procurement → PERMITIR", out)
 
     def test_input_errors_are_one_spanish_line(self):
         (self.dir / "bad.yaml").write_text("a: [1\n")

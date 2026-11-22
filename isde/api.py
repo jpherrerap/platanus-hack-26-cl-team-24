@@ -198,7 +198,7 @@ def create_app(*, db: str | None = None, rewrite=claude_rewrite, seed=True, mode
                         "families": policy.model_dump()["families"],
                         "grants": {name: role.receive for name, role in policy.roles.items()},
                         "vocabulary": guard.policy_at(date.max).vocabulary,
-                        "scope": {"org": case.org, "operation": case.operation}, "day": date.today().isoformat()}
+                        "names": case.names, "scope": {"org": case.org, "operation": case.operation}, "day": date.today().isoformat()}
             finally:
                 guard.close()
 
