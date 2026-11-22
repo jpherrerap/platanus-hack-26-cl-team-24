@@ -117,6 +117,7 @@ def create_app(*, db: str | None = None, rewrite=claude_rewrite, seed=True, mode
             # Optional demo notifications; without the variable the feed starts empty, as before.
             if os.environ.get("MOSAIC_EVENTS"):
                 activity_events.seed(guard, activity_events.PastEvents.load(os.environ["MOSAIC_EVENTS"]).events)
+            activity_events.seed_impact(guard)
         finally:
             guard.close()
     app = FastAPI(title="mosAIc demo", version="0.1.0")
@@ -158,6 +159,16 @@ def create_app(*, db: str | None = None, rewrite=claude_rewrite, seed=True, mode
             guard = open_guard()
             try:
                 return activity_events.listing(guard, limit)
+            finally:
+                guard.close()
+
+    @app.get("/v1/demo/impact")
+    def impact(response: Response, area: str | None = Query(default=None, max_length=40)):
+        response.headers["Cache-Control"] = "no-store"
+        with lock:
+            guard = open_guard()
+            try:
+                return activity_events.impact(guard, area or None)
             finally:
                 guard.close()
 

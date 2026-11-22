@@ -2513,7 +2513,7 @@ class SemanticApiTests(unittest.TestCase):
         page=self.client.get("/").text
         parsed=Markup();parsed.feed(page)
         self.assertEqual(parsed.duplicates, [])
-        for tab in ("simulation","ontology","settings","notifications","flags"):
+        for tab in ("dashboard","simulation","ontology","settings","notifications","flags"):
             self.assertEqual(parsed.nodes["tab-"+tab][1]["role"], "tab")
             self.assertEqual(parsed.nodes["tab-"+tab][1]["aria-controls"], "panel-"+tab)
             self.assertEqual(parsed.nodes["panel-"+tab][1]["role"], "tabpanel")
@@ -2521,6 +2521,18 @@ class SemanticApiTests(unittest.TestCase):
                      "secret-id","secret-mode","operator-token","forget-token","notification-feed","flag-feed","event-dialog",
                      "graph-user","graph-svg","graph-detail"):
             self.assertIn(name, parsed.nodes)
+        self.assertEqual(self.client.get("/v1/demo/events").json()["counts"]["total"], 0)
+
+    def test_impact_mock_is_aggregated_by_area_and_hidden_from_notifications(self):
+        everything = self.client.get("/v1/demo/impact").json()
+        self.assertEqual(everything["totals"]["leaks"], 120)
+        self.assertEqual(len(everything["daily"]), 30)
+        self.assertEqual(sum(d["count"] for d in everything["daily"]), 120)
+        self.assertEqual(everything["totals"]["loss_usd"],
+                         sum(r["count"] * everything["severity_usd"][r["key"]] for r in everything["severities"]))
+        finance = self.client.get("/v1/demo/impact", params={"area": "Finanzas"}).json()
+        self.assertLess(0, finance["totals"]["leaks"])
+        self.assertLess(finance["totals"]["leaks"], 120)
         self.assertEqual(self.client.get("/v1/demo/events").json()["counts"]["total"], 0)
 
     def test_dashboard_prefills_operator_token_only_for_local_requests(self):
