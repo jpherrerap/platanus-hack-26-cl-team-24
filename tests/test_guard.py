@@ -2083,7 +2083,7 @@ class SemanticApiTests(unittest.TestCase):
         for status in ("approved", "revise", "rejected", "delivered"):
             self.assertIn(f"[data-status={status}]", css)
 
-    def test_dashboard_has_four_tabs_preserves_controls_and_starts_without_fabricated_events(self):
+    def test_dashboard_has_five_tabs_preserves_controls_and_starts_without_fabricated_events(self):
         from html.parser import HTMLParser
         class Markup(HTMLParser):
             def __init__(self):
@@ -2096,12 +2096,13 @@ class SemanticApiTests(unittest.TestCase):
         page=self.client.get("/").text
         parsed=Markup();parsed.feed(page)
         self.assertEqual(parsed.duplicates, [])
-        for tab in ("simulation","settings","notifications","flags"):
+        for tab in ("simulation","ontology","settings","notifications","flags"):
             self.assertEqual(parsed.nodes["tab-"+tab][1]["role"], "tab")
             self.assertEqual(parsed.nodes["tab-"+tab][1]["aria-controls"], "panel-"+tab)
             self.assertEqual(parsed.nodes["panel-"+tab][1]["role"], "tabpanel")
         for name in ("source-text","preview-source","accept-source","answer","check-answer","prompt",
-                     "secret-id","secret-mode","operator-token","forget-token","notification-feed","flag-feed","event-dialog"):
+                     "secret-id","secret-mode","operator-token","forget-token","notification-feed","flag-feed","event-dialog",
+                     "graph-user","graph-svg","graph-detail"):
             self.assertIn(name, parsed.nodes)
         self.assertEqual(self.client.get("/v1/demo/events").json()["counts"]["total"], 0)
 
