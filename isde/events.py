@@ -50,7 +50,9 @@ def review_event(guard, review_id, revision, user, text, question, analysis, hyp
         kind, title, status = "allowed", "Se aprobó una respuesta sin riesgo detectado", "approved"
     else:
         kind, status = ("blocked" if risk else "flagged"), "open"
-        title = "Se bloqueó una posible filtración de información" if risk else "Una respuesta contiene señales para revisar"
+        title = ("Se bloqueó una posible filtración de información" if risk
+                 else "Se aprobó una respuesta con señales para revisar" if result["action"] == "allow"
+                 else "Una respuesta contiene señales para revisar")
     return record(guard, kind, title, "review", f"{review_id}:{revision}", {
         "origin": "review_api", "review_id": review_id, "revision": revision, "recipient": user,
         "question": question, "candidate": text, "model": model_id(), "decision": result,

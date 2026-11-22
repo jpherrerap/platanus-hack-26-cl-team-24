@@ -1185,6 +1185,33 @@ class ClaudeTests(unittest.TestCase):
         self.policy = Policy.load(ROOT / "policy.yaml")
         self.card = Card.load(ROOT / "vendor-card.yaml")
 
+    def test_analyst_and_adversary_retry_once_with_correction_then_fail_closed(self):
+        from isde.claude import RETRY_HINT, Interpretations
+        from isde.semantic import ClaudeAnalysis, DraftAssessment
+        text = "BetaAI ya firmó lo de O-17."
+        good = DraftAssessment(facts=[], covers_all_claims=True, fulfills_task=True)
+        roles = []
+        def analyst(role, context, schema, client, model):
+            roles.append(role)
+            if len(roles) == 1:
+                raise ValueError("Claude devolvió una selección con formato inválido")
+            return good
+        with mock.patch("isde.semantic._request", side_effect=analyst):
+            self.assertEqual(ClaudeAnalysis().analyze(self.policy, text, "Novedades"), good)
+        self.assertIn("o17 para O-17", roles[0])
+        self.assertTrue(roles[1].endswith(RETRY_HINT))
+        invented = Interpretations(hypotheses=[Hypothesis(claim=("betaai", "inventado", "x"), quote="BetaAI ya firmó", p_if_seen=.9)])
+        valid = Interpretations(hypotheses=[Hypothesis(claim=("betaai", "offer_status", "signed"), quote="BetaAI ya firmó", p_if_seen=.9)])
+        with mock.patch("isde.claude._request", side_effect=[invented, valid]):
+            self.assertEqual([h.claim for h in assess_hypotheses(self.policy, text, None)], [("betaai", "offer_status", "signed")])
+        with mock.patch("isde.claude._request", side_effect=[invented, invented]):
+            with self.assertRaisesRegex(ValueError, "Predicado de hipótesis desconocido"):
+                assess_hypotheses(self.policy, text, None)
+        with mock.patch("isde.semantic._request", side_effect=ValueError("Configura la clave")) as call:
+            with self.assertRaisesRegex(ValueError, "Configura la clave"):
+                ClaudeAnalysis().analyze(self.policy, text, "Novedades")
+        self.assertEqual(call.call_count, 1)  # Only invalid output is retried, not missing credentials.
+
     def client(self, items):
         def create(**request):
             self.prompt = request["messages"][0]["content"]
