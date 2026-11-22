@@ -1,12 +1,14 @@
 """Local HTTP demo. The caller is the trusted integration for identity and scope."""
+import html
 import json
 import os
 import secrets
 from datetime import date
 from threading import RLock
+from urllib.parse import urlsplit
 from typing import Literal
 
-from fastapi import FastAPI, Header, HTTPException, Query, Response
+from fastapi import FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse
 from .semantic import ClaudeAnalysis, SourceInput, source_graph
 from . import events as activity_events, reviews
@@ -131,9 +133,17 @@ def create_app(*, db: str | None = None, rewrite=claude_rewrite, seed=True, mode
             raise HTTPException(status_code=403, detail="Acceso de operador requerido")
 
     @app.get("/", response_class=HTMLResponse)
-    def dashboard():
+    def dashboard(request: Request):
         from .dashboard import PAGE
-        return HTMLResponse(PAGE, headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
+        page = PAGE
+        # Prefill only for a loopback client under a local Host: a DNS-rebinding page must not read the token.
+        local = request.client and request.client.host in {"127.0.0.1", "::1"} and \
+            urlsplit("//" + request.headers.get("host", "")).hostname in {"127.0.0.1", "localhost", "::1"}
+        if operator_token and local:
+            page = page.replace('placeholder="Introduce tu token">',
+                                f'value="{html.escape(operator_token)}" readonly>', 1).replace(
+                "Se mantiene solo en esta página, sin guardarlo.", "Cargado desde MOSAIC_OPERATOR_TOKEN.", 1)
+        return HTMLResponse(page, headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
                             "Content-Security-Policy": "default-src 'self'; script-src 'unsafe-inline'; "
                                                        "style-src 'unsafe-inline'; object-src 'none'; "
                                                        "base-uri 'none'; frame-ancestors 'none'"})

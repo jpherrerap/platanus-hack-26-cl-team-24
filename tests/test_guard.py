@@ -2081,6 +2081,19 @@ class SemanticApiTests(unittest.TestCase):
         self.assertIn("No hay conexión de envío de correo", page)
         self.assertEqual(self.client.get("/v1/demo/events").json()["counts"]["total"], 0)
 
+    def test_dashboard_prefills_operator_token_only_for_local_requests(self):
+        from fastapi.testclient import TestClient
+        from isde.api import create_app
+        with mock.patch.dict(os.environ, {"MOSAIC_OPERATOR_TOKEN": "tk<z9q"}):
+            app = create_app(db=str(Path(self.tmp.name) / "token.sqlite"), seed=False)
+        local = TestClient(app, base_url="http://127.0.0.1:8001", client=("127.0.0.1", 5000)).get("/").text
+        self.assertIn('value="tk&lt;z9q" readonly', local)
+        self.assertNotIn("tk<z9q", local)
+        # DNS rebinding (foreign Host) and remote clients get the empty field.
+        for client in (TestClient(app, base_url="http://evil.example", client=("127.0.0.1", 5000)),
+                       TestClient(app, base_url="http://127.0.0.1:8001", client=("10.0.0.5", 5000))):
+            self.assertNotIn("z9q", client.get("/").text)
+
     def test_notifications_redact_details_require_operator_and_never_deliver_on_resolution(self):
         from fastapi.testclient import TestClient
         from isde.api import create_app
