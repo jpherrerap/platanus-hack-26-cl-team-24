@@ -17,6 +17,10 @@ class CandidateFact(Model):
     quote: str = Field(min_length=1)
 
 
+EMAIL_TASK = "email"
+FREE_TASKS = {"freeform", EMAIL_TASK}  # Reviews that answer no task of the case.
+
+
 class DraftAssessment(Model):
     facts: list[CandidateFact] = Field(max_length=64)
     covers_all_claims: bool
@@ -184,7 +188,7 @@ class ReviewState(TypedDict, total=False):
 
 def inspect_graph(guard: Guard, model: ClaudeAnalysis):
     def extract(state):
-        if state["task"] != "freeform" and state["task"] not in guard.case.tasks:
+        if state["task"] not in FREE_TASKS and state["task"] not in guard.case.tasks:
             raise ValueError("Tarea desconocida")
         policy = guard.policy_at(state["day"])
         analysis = model.analyze(policy, state["text"], state["question"])
@@ -267,6 +271,10 @@ def score_candidate(guard, state):
         guard.case = original
     if result["action"] != "allow":
         return result, None
+    # A human email answers no task and may say things the vocabulary cannot hold; only the inference risk
+    # (adversary hypotheses + ProbLog) and unverified protected facts decide. Agent answers stay fail-closed.
+    if state.get("task") == EMAIL_TASK:
+        return result, exposure
     if not analysis.covers_all_claims or not analysis.fulfills_task:
         return {"action": "review", "text": None, "attempts": [{"reason": "unverified_task_or_claims"}]}, None
     if not analysis.facts and analysis.has_factual_claims:

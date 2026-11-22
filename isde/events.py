@@ -45,10 +45,12 @@ def message_event(guard, item, evaluated, result, screened):
 def review_event(guard, review_id, revision, user, text, question, analysis, hypotheses, result):
     risk = any(attempt.get("blocked") or attempt.get("reason") in {"personal_identifier", "personal_identifier_link"}
                for attempt in result.get("attempts", []))
-    if result["action"] == "allow" and not any(h.p_if_seen > 0 for h in hypotheses):
-        return
-    kind = "blocked" if risk else "flagged"
-    title = "Se bloqueó una posible filtración de información" if risk else "Una respuesta contiene señales para revisar"
+    clean = result["action"] == "allow" and not any(h.p_if_seen > 0 for h in hypotheses)
+    if clean:
+        kind, title, status = "allowed", "Se aprobó una respuesta sin riesgo detectado", "approved"
+    else:
+        kind, status = ("blocked" if risk else "flagged"), "open"
+        title = "Se bloqueó una posible filtración de información" if risk else "Una respuesta contiene señales para revisar"
     return record(guard, kind, title, "review", f"{review_id}:{revision}", {
         "origin": "review_api", "review_id": review_id, "revision": revision, "recipient": user,
         "question": question, "candidate": text, "model": model_id(), "decision": result,
@@ -58,7 +60,7 @@ def review_event(guard, review_id, revision, user, text, question, analysis, hyp
             {"component": "rdf_problog", "output": result},
         ],
         "notice": "Registro de salidas estructuradas y decisión; no contiene razonamiento interno del proveedor.",
-    })
+    }, status)
 
 
 def source_event(guard, source, result):
