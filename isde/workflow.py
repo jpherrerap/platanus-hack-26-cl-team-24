@@ -34,6 +34,7 @@ class Flow(TypedDict, total=False):
     fingerprint: str
     candidate: str
     decision: dict
+    screened: dict  # First evaluation of the agent's own draft; rewrites overwrite `decision`.
     suggestion: str | None
     rewrites: int
     outcome: dict
@@ -50,10 +51,11 @@ def fingerprint(user: str, task: str, draft: str, day: date, attachments=()) -> 
 def make_workflow(guard: Guard, rewrite: Callable = claude_rewrite, max_rewrites: int = 2):
     def evaluate(state: Flow):
         exact = guard.run(state["user"], state["task"], state["day"], draft=state["candidate"], strict=True)
+        screened = state.get("screened") or exact
         if exact["action"] == "allow":
-            return {"decision": exact, "suggestion": None}
+            return {"decision": exact, "screened": screened, "suggestion": None}
         alternatives = guard.run(state["user"], state["task"], state["day"], draft=state["candidate"])
-        return {"decision": exact, "suggestion": alternatives.get("text")}
+        return {"decision": exact, "screened": screened, "suggestion": alternatives.get("text")}
 
     def route(state: Flow):
         if state["decision"]["action"] == "allow":

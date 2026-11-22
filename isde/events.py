@@ -7,15 +7,36 @@ from .claude import model_id
 from .model import INTRINSIC_FAMILY
 
 
-def record(guard, kind, title, target_type, target_id, details):
+def record(guard, kind, title, target_type, target_id, details, status="open"):
     key = json.dumps([*guard.scope, kind, target_type, target_id], separators=(",", ":"))
     event_id = hashlib.sha256(key.encode()).hexdigest()[:32]
     guard.db.execute("""
         INSERT INTO activity_events VALUES (?,?,?,?,?,?,?,?,?,?,NULL,NULL)
         ON CONFLICT(org,op,event_id) DO NOTHING
     """, (*guard.scope, event_id, kind, title, datetime.now(timezone.utc).isoformat(),
-          target_type, target_id, "open", json.dumps(details, ensure_ascii=False)))
+          target_type, target_id, status, json.dumps(details, ensure_ascii=False)))
     return event_id
+
+
+MESSAGE_TITLES = {"allow": "Se entregó una respuesta sin cambios",
+                  "repair": "Se reparó una respuesta antes de entregarla",
+                  "review": "Se retuvo una respuesta para revisión humana"}
+
+
+def message_event(guard, request_id, user, task, result, screened):
+    # Attempts come from the agent's original draft, which shows what was at risk before any rewrite.
+    # Metadata only: the draft, delivered text, attachments and hypothesis quotes stay out of the log.
+    attempts = [{key: attempt[key] for key in ("changes", "blocked", "reason") if key in attempt}
+                for attempt in screened.get("attempts", [])]
+    if result["action"] == "allow":
+        kind, status = "allowed", "delivered"
+    else:
+        kind, status = ("blocked" if any(a.get("blocked") for a in attempts) else "flagged"), "open"
+    return record(guard, kind, MESSAGE_TITLES[result["action"]], "message", f"{request_id}:{user}", {
+        "origin": "message_api", "request_id": request_id, "recipient": user, "task": task,
+        "decision": {"action": result["action"], "attempts": attempts},
+        "notice": "Solo decisión y metadatos; no incluye el borrador, el texto entregado ni los adjuntos.",
+    }, status)
 
 
 def review_event(guard, review_id, revision, user, text, question, analysis, hypotheses, result):
@@ -62,7 +83,7 @@ def listing(guard, limit=50):
     """, (*guard.scope, limit))
     keys = ("id", "kind", "title", "created_at", "target_type", "status", "resolved_at")
     items = [dict(zip(keys, row)) for row in rows]
-    counts = {"total": 0, "blocked": 0, "flagged": 0, "open": 0}
+    counts = {"total": 0, "blocked": 0, "flagged": 0, "allowed": 0, "open": 0}
     for kind, status, count in guard.db.execute(
         "SELECT kind,status,count(*) FROM activity_events WHERE org=? AND op=? GROUP BY kind,status", guard.scope):
         counts["total"] += count
