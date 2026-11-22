@@ -1,0 +1,37 @@
+# La intranet de AlphaCorp lo dispara en cada push a su main (repository_dispatch intranet-updated).
+name: Actualiza la intranet de AlphaCorp
+
+on:
+  repository_dispatch:
+    types: [intranet-updated]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# Pushes seguidos de la intranet se procesan en orden; cada corrida apunta al último main.
+concurrency:
+  group: update-intranet
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Apunta el submódulo al último commit de main de la intranet
+        run: |
+          sha=$(git ls-remote https://github.com/jpherrerap/alphacorp-intranet.git refs/heads/main | cut -f1)
+          test -n "$sha"
+          if [ "$(git rev-parse HEAD:testbeds/alphacorp-intranet)" = "$sha" ]; then
+            echo "El submódulo ya apunta a $sha"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git update-index --cacheinfo 160000,"$sha",testbeds/alphacorp-intranet
+          git commit -m "Actualiza la intranet de AlphaCorp a ${sha:0:7}"
+          git pull --rebase origin main
+          git push origin HEAD:main
