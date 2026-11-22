@@ -200,6 +200,28 @@ class DynamicVocabularyTests(unittest.TestCase):
             propose(self.policy, self.source, internal_prompt="Prompt guardado por el operador.")
         self.assertIn('"el informe puede\ndecir que X"', request.call_args.args[0])
 
+    def test_spanish_identifiers_from_claude_are_folded_but_quotes_stay_literal(self):
+        # Shapes Claude returned for the fictional report example; before, the whole selection was discarded.
+        from isde.claude import ObserverSuggestions
+        from isde.semantic import CandidateFact
+        from pydantic import ValidationError
+        text = "Documento ficticio de personal: Alba tiene un diagnóstico médico reservado."
+        quote = "Alba tiene un diagnóstico médico reservado"
+        result = ObserverSuggestions.model_validate({
+            "items": [{"fact": ["Alba", "intrinsic_sensitivity", "diagnóstico_médico_reservado"], "quote": quote, "confidence": .9}],
+            "hypotheses": [{"claim": ["información_médica", "intrinsic_sensitivity", "revelación_salud"], "quote": quote,
+                            "p_if_seen": .8}]})
+        self.assertEqual(result.hypotheses[0].claim, ("informacion_medica", "intrinsic_sensitivity", "revelacion_salud"))
+        with mock.patch("isde.claude._request", return_value=result):
+            events = propose(self.policy, Source(origin="informe", at=DAY, text=text, user="usuario_demo"), "delivered")
+        self.assertIn(("alba", "intrinsic_sensitivity", "diagnostico_medico_reservado"),
+                      [h.claim for h in events[0].hypotheses])
+        self.assertEqual({h.quote for h in events[0].hypotheses}, {quote})
+        self.assertEqual(CandidateFact(fact=["Revisión_Equipo", "fecha", "viernes"], quote="x").fact,
+                         ("revision_equipo", "fecha", "viernes"))
+        with self.assertRaises(ValidationError):
+            CandidateFact(fact=["O-18", "fecha", "viernes"], quote="x")  # Folding never invents separators.
+
     def test_observer_cannot_create_undefined_predicates(self):
         from isde.claude import ObserverSuggestions
         result = ObserverSuggestions(items=[{"fact":self.fact,

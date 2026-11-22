@@ -9,13 +9,13 @@ from pydantic import Field
 from .claude import CANONICAL_IDS, Source, _request, assess_hypotheses, model_id, propose, read_path, retry_invalid
 from .graphs import describe
 from .guard import Guard
-from .model import (Clause, Hypothesis, INTRINSIC_FAMILY, Model, Observation, Option, ProtectedLiteral, Task, Triple,
+from .model import (Clause, Hypothesis, INTRINSIC_FAMILY, Model, ModelTriple, Observation, Option, ProtectedLiteral, Task,
                     VocabularyProposal)
 from .prompts import DEFAULT_PROMPTS
 
 
 class CandidateFact(Model):
-    fact: Triple
+    fact: ModelTriple
     quote: str = Field(min_length=1)
 
 

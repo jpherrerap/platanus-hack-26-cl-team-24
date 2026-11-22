@@ -8,7 +8,7 @@ from pydantic import Field, ValidationError, model_validator
 
 from .privacy import rut_format_signals
 from .model import (Entity, Grade, Hypothesis, Id, INTRINSIC_FAMILY, Model, Observation, Policy, Probability,
-                    ProtectedLiteral, RuleProposal, Triple, VocabularyProposal, intrinsic_family)
+                    ModelTriple, ProtectedLiteral, RuleProposal, Triple, VocabularyProposal, intrinsic_family)
 from .prompts import ADVERSARIAL_PROMPT, ENTITY_INSTRUCTION, INTERNAL_ONTOLOGY_PROMPT, PATH_PROMPT, SOURCE_COVERAGE_INSTRUCTION
 
 
@@ -227,7 +227,7 @@ def _api_error(exc, model):
 
 
 class SuggestedFact(Model):
-    fact: Triple
+    fact: ModelTriple
     quote: str = Field(min_length=1)
     confidence: Probability
 
