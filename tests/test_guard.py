@@ -192,6 +192,14 @@ class DynamicVocabularyTests(unittest.TestCase):
         self.assertEqual([p.predicate for p in events[0].vocabulary], ["domicilio"])
         self.assertEqual(events[1].facts, [self.fact])
 
+    def test_extraction_treats_publication_notes_as_facts_even_with_custom_prompt(self):
+        from isde.claude import InternalSuggestions
+        result = InternalSuggestions(vocabulary=[self.concept],
+                                     items=[{"fact": self.fact, "quote": "mi direccion es Roble 10", "confidence": .9}])
+        with mock.patch("isde.claude._request", return_value=result) as request:
+            propose(self.policy, self.source, internal_prompt="Prompt guardado por el operador.")
+        self.assertIn('"el informe puede\ndecir que X"', request.call_args.args[0])
+
     def test_observer_cannot_create_undefined_predicates(self):
         from isde.claude import ObserverSuggestions
         result = ObserverSuggestions(items=[{"fact":self.fact,
