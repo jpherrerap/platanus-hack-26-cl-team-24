@@ -108,7 +108,7 @@ def make_workflow(guard: Guard, rewrite: Callable = claude_rewrite, max_rewrites
     graph.add_node("rewrite", rewrite_answer)
     graph.add_node("deliver", deliver)
     graph.add_node("review", review)
-    graph.add_edge(START, "evaluate")
+    graph.add_conditional_edges(START, lambda state: "evaluate" if state["candidate"] else "review")
     graph.add_conditional_edges("evaluate", route)
     graph.add_conditional_edges("rewrite", after_rewrite)
     graph.add_edge("deliver", END)

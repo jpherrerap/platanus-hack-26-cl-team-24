@@ -67,7 +67,16 @@ def transcribe(item: Attachment, *, http=None) -> str:
     return Transcript(text=response.json()["text"]).text
 
 
-def with_attachments(draft: str, attachments: list[Attachment], **kwargs) -> str:
+def with_attachments(draft: str, attachments: list[Attachment], **kwargs) -> str | None:
+    """None means an audio could not be transcribed; the caller must not deliver it."""
     # shortcut: the recipient's inbox shows the transcript, not the file; the integration delivers the bytes it sent.
-    parts = [draft] + [f"[Adjunto: {item.name}]\n{transcribe(item, **kwargs)}" for item in attachments]
+    parts = [draft]
+    for item in attachments:
+        try:
+            parts.append(f"[Adjunto: {item.name}]\n{transcribe(item, **kwargs)}")
+        except ValueError:
+            # Speech-to-text is optional: without it every audio is rejected instead of failing the request.
+            if item.media_type in AUDIO:
+                return None
+            raise
     return "\n\n".join(parts)

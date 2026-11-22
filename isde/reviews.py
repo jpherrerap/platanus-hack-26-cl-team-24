@@ -55,6 +55,9 @@ def review(guard, model, review_id, user, task, day, text, question, *, revision
 
     # Transcribe only after the replay checks so a repeated request costs nothing.
     text = with_attachments(text, attachments) if attachments else text
+    if text is None:
+        return {"review_id": review_id, "status": "rejected", "revision": 0,
+                "feedback": "Se rechazó el audio porque no se pudo transcribir. Quítalo para evaluar el resto."}
     state = inspect_graph(guard, model).invoke({"user": user, "task": task, "question": question, "day": day, "text": text})
     status = "approved" if state["result"]["action"] == "allow" else "revise"
     snapshot = encode({"observer": state["context"], "internal": state["internal"]})

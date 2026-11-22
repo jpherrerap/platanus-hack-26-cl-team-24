@@ -1488,9 +1488,24 @@ class AgentApiTests(unittest.TestCase):
         self.assertEqual(text, "Hola.\n\n[Adjunto: nota.mp3]\nLa oferta está firmada.")
         self.assertEqual((sent["headers"], sent["data"]), ({"xi-api-key": "k"}, {"model_id": "scribe_v2"}))
         self.assertEqual(sent["files"]["file"], ("nota.mp3", b"ID3", "audio/mpeg"))
-        with mock.patch.dict(os.environ, {}, clear=True), mock.patch("isde.media.stt_key", return_value=None), \
-             self.assertRaisesRegex(ValueError, "ELEVENLABS_API_KEY"):
-            with_attachments("Hola.", [audio], http=Http())
+        with mock.patch.dict(os.environ, {}, clear=True), mock.patch("isde.media.stt_key", return_value=None):
+            self.assertIsNone(with_attachments("Hola.", [audio], http=Http()))
+        class Down:
+            def post(self, *args, **kwargs):
+                raise OSError("sin red")
+        with mock.patch.dict(os.environ, {"ELEVENLABS_API_KEY": "k"}):
+            self.assertIsNone(with_attachments("Hola.", [audio], http=Down()))
+        item = {**self.request, "draft": "Hola.", "attachments": [audio.model_dump()]}
+        with mock.patch("isde.media.stt_key", return_value=None):
+            result = self.client.post("/v1/messages", json=item)
+            self.assertEqual(result.status_code, 200, result.text)
+            self.assertEqual((result.json()["action"], result.json()["text"]), ("review", None))
+            self.assertEqual(self.client.post("/v1/messages", json=item).json(), result.json())
+        self.assertEqual(self.client.get("/v1/inbox/luis").json()["messages"], [])
+        review = {"review_id": "audio", "user": "luis", "task": "freeform", "question": "Saluda",
+                  "day": "2026-01-04", "text": "Hola.", "attachments": [audio.model_dump()]}
+        with mock.patch("isde.media.stt_key", return_value=None):
+            self.assertEqual(self.client.post("/v1/reviews", json=review).json()["status"], "rejected")
         with self.assertRaisesRegex(ValueError, "base64"):
             Attachment(name="x.mp3", media_type="audio/mpeg", data="no es base64!").raw()
 
