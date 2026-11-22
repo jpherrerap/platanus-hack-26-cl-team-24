@@ -8,7 +8,7 @@ from pydantic import Field, ValidationError, model_validator
 
 from .privacy import rut_format_signals
 from .model import (Entity, Grade, Hypothesis, Id, INTRINSIC_FAMILY, Model, Observation, Policy, Probability,
-                    RuleProposal, Triple, VocabularyProposal, intrinsic_family)
+                    ProtectedLiteral, RuleProposal, Triple, VocabularyProposal, intrinsic_family)
 from .prompts import ADVERSARIAL_PROMPT, ENTITY_INSTRUCTION, INTERNAL_ONTOLOGY_PROMPT, PATH_PROMPT, SOURCE_COVERAGE_INSTRUCTION
 
 
@@ -248,6 +248,7 @@ class InternalSuggestions(Suggestions):
     entities: list[Entity] = Field(default_factory=list, max_length=64)
     rules: list[RuleProposal] = Field(default_factory=list, max_length=32)
     vocabulary: list[VocabularyProposal] = Field(default_factory=list, max_length=32)
+    protected_literals: list[ProtectedLiteral] = Field(default_factory=list, max_length=64)
     has_factual_claims: bool = True
     covers_all_claims: bool = True
     unrepresented_claims: list[UnrepresentedClaim] = Field(default_factory=list, max_length=16)
@@ -364,14 +365,22 @@ def propose(policy: Policy, source: Source, grade: Grade | None = None, *, graph
             raise
         quotes = [item.quote for item in result.items]
         incomplete = False
+        invalid_literals = False
         if source.user is None:
             quotes += [p.quote for p in result.vocabulary] + [p.quote for p in result.rules]
             quotes += [p.quote for p in result.unrepresented_claims]
+            for protected in result.protected_literals:
+                try:
+                    protected.validate_source(source.text)
+                    if protected.family != INTRINSIC_FAMILY:
+                        raise ValueError("La extracción no puede asignar permisos a valores protegidos")
+                except ValueError:
+                    invalid_literals = True
             defined = set(policy.vocabulary) | set(policy.families) | {p.predicate for p in result.vocabulary}
             used = {item.fact[1] for item in result.items}
             used.update(atom[1] for rule in result.rules for atom in [*rule.rule.when, rule.rule.then])
             missing = used - defined
-            empty = not result.items and not result.rules and not result.vocabulary
+            empty = not result.items and not result.rules and not result.vocabulary and not result.protected_literals
             incomplete = (not result.covers_all_claims or bool(result.unrepresented_claims) or
                           (empty and result.has_factual_claims) or (not empty and not result.has_factual_claims))
         else:
@@ -381,7 +390,7 @@ def propose(policy: Policy, source: Source, grade: Grade | None = None, *, graph
             missing |= {h.claim[1] for h in result.hypotheses
                         if h.claim[1] not in defined and h.claim[1] != INTRINSIC_FAMILY}
             empty = not result.items and not result.hypotheses
-        if attempt == 0 and (incomplete or (empty and source.user is not None) or missing or
+        if attempt == 0 and (incomplete or invalid_literals or (empty and source.user is not None) or missing or
                              any(not quote.strip() or quote not in source.text for quote in quotes)):
             correction = " Revisa de nuevo: cada cita debe ser una copia literal del texto. "
             if missing:
@@ -400,6 +409,8 @@ def propose(policy: Policy, source: Source, grade: Grade | None = None, *, graph
                 correction += ("Considera qué pistas o interpretaciones puede obtener el destinatario del texto visible. "
                                "Usa solo los predicados disponibles; si no hay indicios, devuelve listas vacías.")
             continue
+        if invalid_literals:
+            raise ValueError("La propuesta protegida requiere una cita literal y sensibilidad intrínseca")
         if incomplete:
             for claim in result.unrepresented_claims:
                 if not claim.quote.strip() or claim.quote not in source.text:
@@ -452,6 +463,10 @@ def propose(policy: Policy, source: Source, grade: Grade | None = None, *, graph
     if vocabulary:
         events.append(Observation(origin=source.origin, at=source.at, resource=source.resource,
                                   quote=source.text, vocabulary=vocabulary, assessor=model_id(model)))
+    if source.user is None and result.protected_literals:
+        events.append(Observation(origin=source.origin, at=source.at, resource=source.resource,
+                                  quote=source.text, protected_literals=result.protected_literals,
+                                  assessor=model_id(model)))
     for item in result.items:
         subject, predicate, value = item.fact
         if not item.quote.strip() or item.quote not in source.text:

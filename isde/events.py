@@ -23,12 +23,18 @@ MESSAGE_TITLES = {"allow": "Se entregó una respuesta sin cambios",
                   "review": "Se retuvo una respuesta para revisión humana"}
 
 
+def blocked_disclosure(result):
+    return any(attempt.get("blocked") or attempt.get("reason") in {
+        "personal_identifier", "personal_identifier_link", "protected_literal",
+    } for attempt in result.get("attempts", []))
+
+
 def message_event(guard, item, evaluated, result, screened):
     # Attempts come from the agent's original draft, which shows what was at risk before any rewrite.
     if result["action"] == "allow":
         kind, status = "allowed", "delivered"
     else:
-        kind, status = ("blocked" if any(a.get("blocked") for a in screened.get("attempts", [])) else "flagged"), "open"
+        kind, status = ("blocked" if blocked_disclosure(screened) else "flagged"), "open"
     # Full content for the operator's audit; files are kept as metadata and digest, not bytes.
     return record(guard, kind, MESSAGE_TITLES[result["action"]], "message", f"{item.request_id}:{item.user}", {
         "origin": "message_api", "request_id": item.request_id, "recipient": item.user, "task": item.task,
@@ -43,8 +49,7 @@ def message_event(guard, item, evaluated, result, screened):
 
 
 def review_event(guard, review_id, revision, user, text, question, analysis, hypotheses, result):
-    risk = any(attempt.get("blocked") or attempt.get("reason") in {"personal_identifier", "personal_identifier_link"}
-               for attempt in result.get("attempts", []))
+    risk = blocked_disclosure(result)
     clean = result["action"] == "allow" and not any(h.p_if_seen > 0 for h in hypotheses)
     if clean:
         kind, title, status = "allowed", "Se aprobó una respuesta sin riesgo detectado", "approved"
@@ -70,9 +75,10 @@ def source_event(guard, source, result):
     hypotheses = [h for event in observations for h in event.hypotheses
                   if h.p_if_seen > 0 and (h.claim[1] == INTRINSIC_FAMILY or h.claim[1] in guard.policy.families)]
     missing = result.get("missing_recipients", [])
-    if not hypotheses and observations and not missing:
+    sensitive = bool(hypotheses) or any(event.protected_literals for event in observations)
+    if not sensitive and observations and not missing:
         return
-    title = "Se detectó información potencialmente sensible en una fuente" if hypotheses else "Una fuente necesita revisión"
+    title = "Se detectó información potencialmente sensible en una fuente" if sensitive else "Una fuente necesita revisión"
     details = {"origin": "source_analysis", "source_id": source.origin, "source_text": source.text,
                "model": model_id(), "missing_recipients": missing,
                "observations": [e.model_dump(mode="json") for e in observations],

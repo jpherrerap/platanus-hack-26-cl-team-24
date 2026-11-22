@@ -1,5 +1,4 @@
 """Local HTTP demo. The caller is the trusted integration for identity and scope."""
-import hashlib
 import json
 import os
 import secrets
@@ -16,7 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from .cli import EXAMPLES, load_env
 from .guard import Guard
 from .media import Attachment, with_attachments
-from .model import Batch, Case, Family, Policy
+from .model import Batch, Case, Family, INTRINSIC_FAMILY, Policy
 from .prompts import DEFAULT_PROMPTS
 from .workflow import claude_rewrite, fingerprint, make_workflow
 
@@ -268,14 +267,16 @@ def create_app(*, db: str | None = None, rewrite=claude_rewrite, seed=True, mode
                 guard.close()
 
     @app.post("/v1/demo/sources/preview")
-    def preview_source(source: SourceInput):
+    def preview_source(source: SourceInput, x_mosaic_operator_token: str = Header(default="")):
+        if any(literal.family != INTRINSIC_FAMILY for literal in source.protected_literals):
+            require_operator(x_mosaic_operator_token)
         with lock:
             guard = open_guard()
             try:
                 valid = {a.user for a in case.assignments if (a.org, a.operation) == guard.scope}
                 if set(source.recipients) - valid:
                     raise ValueError("Destinatario fuera del directorio")
-                digest = hashlib.sha256(source.model_dump_json().encode()).hexdigest()
+                digest = source.digest()
                 context = {"internal": guard.model_context(None, source.at),
                            "recipients": {u: guard.model_context(u, source.at) for u in source.recipients}}
                 try:
@@ -375,7 +376,10 @@ def create_app(*, db: str | None = None, rewrite=claude_rewrite, seed=True, mode
                 guard.close()
 
     @app.post("/v1/observations")
-    def observations(batch: Batch):
+    def observations(batch: Batch, x_mosaic_operator_token: str = Header(default="")):
+        if any(literal.family != INTRINSIC_FAMILY for event in batch.observations
+               for literal in event.protected_literals):
+            require_operator(x_mosaic_operator_token)
         with lock:
             guard = open_guard()
             try:
@@ -390,7 +394,9 @@ def create_app(*, db: str | None = None, rewrite=claude_rewrite, seed=True, mode
                 guard.close()
 
     @app.post("/v1/sources")
-    def sources(source: IncomingSource):
+    def sources(source: IncomingSource, x_mosaic_operator_token: str = Header(default="")):
+        if any(literal.family != INTRINSIC_FAMILY for literal in source.protected_literals):
+            require_operator(x_mosaic_operator_token)
         with lock:
             guard = open_guard()
             try:
@@ -398,7 +404,7 @@ def create_app(*, db: str | None = None, rewrite=claude_rewrite, seed=True, mode
                 if set(source.recipients) - valid:
                     raise ValueError("Destinatario fuera del directorio")
                 data = SourceInput.model_validate(source.model_dump(exclude={"accept"}))
-                digest = hashlib.sha256(data.model_dump_json().encode()).hexdigest()
+                digest = data.digest()
                 if source.accept:
                     previous = guard.db.execute(
                         "SELECT digest FROM source_imports WHERE org=? AND op=? AND source_id=?",

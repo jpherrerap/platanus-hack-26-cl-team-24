@@ -66,6 +66,13 @@ no poder representar una afirmación con que no exista: usa covers_all_claims fa
 y unrepresented_claims, con quote literal y reason, si queda contenido relevante
 sin representar. No devuelvas una extracción vacía como si fuera completa.
 
+En protected_literals, registra los valores literales que la fuente identifica
+como confidenciales, por ejemplo el valor completo de una credencial privada.
+Conserva exactamente mayúsculas, signos y espacios en value. En quote, copia
+un fragmento literal que incluya el valor y respalde su carácter protegido.
+Usa siempre intrinsic_sensitivity. No registres el nombre de una variable si
+solo su valor es secreto.
+
 Una advertencia, posibilidad, intención o condición también aporta información.
 Puedes registrar que la fuente reporta un evento, sin afirmar que el evento ya
 ocurrió o que es verdadero. Reifica el reporte como una entidad vinculada a

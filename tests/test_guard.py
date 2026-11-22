@@ -256,6 +256,35 @@ class DynamicVocabularyTests(unittest.TestCase):
             self.assertEqual(propose(self.policy, Source(origin="saludo", at=DAY, text="hola amigo!! q tal")), [])
         self.assertEqual(request.call_count, 1)
 
+    def test_source_proposal_preserves_literal_and_rejects_invented_values(self):
+        value = "PrIvAtE.a+B9?x"
+        source = Source(origin="valor_privado", at=DAY,
+                        text=f"El valor confidencial es {value}.")
+        calls = []
+
+        def create(**request):
+            calls.append(request)
+            candidate = value.lower() if len(calls) == 1 else value
+            payload = {"items": [], "protected_literals":[{"value":candidate, "quote":source.text}]}
+            return SimpleNamespace(content=[SimpleNamespace(type="tool_use", name="select_evidence", input=payload)],
+                                   stop_reason="tool_use")
+
+        client = SimpleNamespace(messages=SimpleNamespace(create=create))
+        observations = propose(self.policy, source, client=client, model="claude-test")
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(observations), 1)
+        self.assertEqual([literal.value for literal in observations[0].protected_literals], [value])
+        self.assertEqual(observations[0].protected_literals[0].quote, source.text)
+
+        from isde.claude import InternalSuggestions
+        invented = InternalSuggestions(items=[], protected_literals=[
+            {"value":value, "quote":f"Una fuente inexistente contiene {value}"},
+        ])
+        with mock.patch("isde.claude._request", return_value=invented) as request:
+            with self.assertRaisesRegex(ValueError, "La propuesta protegida requiere una cita literal"):
+                propose(self.policy, source)
+        self.assertEqual(request.call_count, 2)
+
     def test_unexplained_empty_extraction_is_an_error_after_retry(self):
         from isde.claude import InternalSuggestions
         with mock.patch("isde.claude._request", return_value=InternalSuggestions(items=[])) as request:
@@ -374,7 +403,7 @@ class DynamicVocabularyTests(unittest.TestCase):
         from fastapi.testclient import TestClient
         from isde.api import create_app
         from isde.claude import InternalSuggestions, Interpretations, ObserverSuggestions
-        from isde.semantic import CandidateFact, DraftAssessment
+        from isde.semantic import CandidateFact, DraftFacts
         observed = []
         def fake(role, context, schema, client, model):
             observed.append((schema.__name__, context))
@@ -387,9 +416,8 @@ class DynamicVocabularyTests(unittest.TestCase):
                 self.assertIn("relacion_fuente_1", context["policy"]["vocabulary"])
                 return schema(items=[{"fact":[self.fact[0],"relacion_fuente_1",self.fact[2]],
                                       "quote":"mi direccion es Roble 10", "confidence":.9}])
-            if schema is DraftAssessment:
-                return schema(facts=[CandidateFact(fact=self.fact, quote="Roble 10")],
-                              covers_all_claims=True, fulfills_task=True)
+            if schema is DraftFacts:
+                return schema(facts=[CandidateFact(fact=self.fact, quote="Roble 10")])
             if schema is Interpretations:
                 self.assertNotIn(self.concept["description"], str(context["vocabulario"]))
                 self.assertNotIn("domicilio", context["vocabulario"])
@@ -431,7 +459,7 @@ class DynamicVocabularyTests(unittest.TestCase):
             self.assertEqual(result.json()["status"], "revise")
             self.assertEqual(client.get("/v1/inbox/revisor_demo").json()["messages"], [])
             self.assertEqual([name for name, _ in observed],
-                             ["InternalSuggestions", "ObserverSuggestions", "DraftAssessment", "Interpretations"])
+                             ["InternalSuggestions", "ObserverSuggestions", "DraftFacts", "Interpretations"])
             self.assertEqual(observed[0][1]["source_id"], observed[1][1]["source_id"])
             self.assertNotEqual(observed[1][1]["source_id"], "correo_01")
 
@@ -481,7 +509,6 @@ class DynamicVocabularyTests(unittest.TestCase):
     @unittest.skipUnless(all(importlib.util.find_spec(n) for n in ("fastapi", "langgraph", "httpx")),
                          "Instala el extra api")
     def test_empty_preview_cannot_be_accepted_or_consume_source_id(self):
-        import hashlib
         from fastapi.testclient import TestClient
         from isde.api import create_app
         from isde.semantic import SourceInput
@@ -506,7 +533,7 @@ class DynamicVocabularyTests(unittest.TestCase):
             guard = Guard(path, self.policy, self.case)
             try:
                 self.assertEqual(guard.db.execute("SELECT count(*) FROM source_imports").fetchone()[0], 0)
-                digest = hashlib.sha256(SourceInput.model_validate(body).model_dump_json().encode()).hexdigest()
+                digest = SourceInput.model_validate(body).digest()
                 guard.db.execute("INSERT INTO source_imports VALUES (?,?,?,?)", (*guard.scope, "correo_01", digest))
             finally:
                 guard.close()
@@ -986,6 +1013,58 @@ class GuardTests(unittest.TestCase):
         result = self.decision("ines")
         self.assertAlmostEqual(result["attempts"][0]["changes"][0]["after"], .1125)
         self.assertEqual(self.decision("ines", "signature")["action"], "review")
+
+    def test_catalogue_literal_uses_family_grants_and_operation_scope(self):
+        from isde.model import ProtectedLiteral
+
+        value = "L1tErAl+-exact"
+        self.case.clauses["literal"] = Clause(text=f"Referencia privada: {value}.", facts=[],
+                                              provides=["answer_literal"])
+        self.case.tasks["literal"] = Task(requires=["answer_literal"], options=[Option(clauses=["literal"])])
+        self.g.observe([Observation(origin="bound_literal", at=DAY, quote=f"Referencia privada: {value}.",
+                                    protected_literals=[
+            ProtectedLiteral(value=value, quote=f"Referencia privada: {value}.", family="offer_status"),
+        ])])
+
+        denied = self.decision("luis", "literal", "denied_literal")
+        self.assertEqual(denied["action"], "review")
+        self.assertEqual(denied["attempts"][0]["reason"], "protected_literal")
+        self.assertNotIn(value, json.dumps(denied))
+        self.assertEqual(self.g.inbox("luis"), [])
+
+        allowed = self.decision("sofia", "literal", "allowed_literal")
+        self.assertEqual(allowed["action"], "allow")
+        self.assertIn(value, self.g.inbox("sofia")[0]["text"])
+
+        legal = next(item for item in self.case.assignments if item.user == "sofia")
+        legal.end = date(2026, 1, 5)
+        with mock.patch("isde.guard.date", wraps=date) as clock:
+            clock.today.return_value = date(2026, 1, 6)
+            denied_after_expiry = self.decision("sofia", "literal")
+        self.assertEqual(denied_after_expiry["action"], "review")
+        self.assertEqual(denied_after_expiry["attempts"][0]["reason"], "protected_literal")
+
+        other_case = self.case.model_copy(deep=True)
+        other_case.operation = "other"
+        for assignment in other_case.assignments:
+            assignment.operation = "other"
+        with contextlib.closing(Guard(self.path, self.policy, other_case)) as other:
+            self.assertEqual(other.run("luis", "literal", DAY)["action"], "allow")
+
+    def test_bad_literal_family_rolls_back_other_values(self):
+        from isde.model import ProtectedLiteral
+
+        text = "Primero ABS-879-D, después XYZ-999-A."
+        self.case.clauses["literal"] = Clause(text="Primero ABS-879-D.", facts=[], provides=["answer_literal"])
+        self.case.tasks["literal"] = Task(requires=["answer_literal"], options=[Option(clauses=["literal"])])
+        observations = [Observation(origin="literal_rollback", at=DAY, quote=text, protected_literals=[
+            ProtectedLiteral(value="ABS-879-D", quote=text),
+            ProtectedLiteral(value="XYZ-999-A", quote=text, family="unknown_policy_family"),
+        ])]
+        with self.assertRaisesRegex(ValueError, "Familia desconocida"):
+            self.g.observe(observations)
+        self.assertEqual(self.decision("luis", "literal")["action"], "allow")
+        self.assertFalse(self.g.source_has_content("literal_rollback"))
 
     def test_scope_vigencia_e_herencia(self):
         self.assertEqual(self.decision("sofia", "signature")["action"], "allow")
@@ -1741,25 +1820,25 @@ class HypothesisTests(ClaudeTests):
         self.assertNotIn("BetaAI", g.inbox("ana")[0]["text"])
 
     def test_hypotheses_respect_historical_permissions_and_restart(self):
-        with tempfile.TemporaryDirectory() as folder:
-            db = str(Path(folder) / "pilot.sqlite")
-            case = Case.load(ROOT / "case.yaml")
-            hint = Hypothesis(claim=SIGN, quote="La revisión terminó.", p_if_seen=.85)
-            g = Guard(db, self.policy, case)
-            try:
-                for user in ["ana","ines"]:
-                    g.observe([Observation(origin="record", user=user, grade="possible_access",
-                                           resource="signature_record", at=DAY,
-                                           quote=hint.quote, hypotheses=[hint])])
-            finally:
-                g.close()
-            g = Guard(db, self.policy, case)
-            self.addCleanup(g.close)
-            self.assertEqual(g.hypotheses("ana", DAY), [])
-            self.assertEqual(g.hypotheses("ines", DAY)[0].p_seen, .15)
-            different = Guard(db, self.policy, case.model_copy(update={"operation": "other"}))
-            self.addCleanup(different.close)
-            self.assertEqual(different.hypotheses("ines", DAY), [])
+        folder = self.enterContext(tempfile.TemporaryDirectory())
+        db = str(Path(folder) / "pilot.sqlite")
+        case = Case.load(ROOT / "case.yaml")
+        hint = Hypothesis(claim=SIGN, quote="La revisión terminó.", p_if_seen=.85)
+        g = Guard(db, self.policy, case)
+        try:
+            for user in ["ana","ines"]:
+                g.observe([Observation(origin="record", user=user, grade="possible_access",
+                                       resource="signature_record", at=DAY,
+                                       quote=hint.quote, hypotheses=[hint])])
+        finally:
+            g.close()
+        g = Guard(db, self.policy, case)
+        self.addCleanup(g.close)
+        self.assertEqual(g.hypotheses("ana", DAY), [])
+        self.assertEqual(g.hypotheses("ines", DAY)[0].p_seen, .15)
+        different = Guard(db, self.policy, case.model_copy(update={"operation": "other"}))
+        self.addCleanup(different.close)
+        self.assertEqual(different.hypotheses("ines", DAY), [])
 
 
 @unittest.skipUnless(
@@ -2110,6 +2189,103 @@ class SemanticApiTests(unittest.TestCase):
         self.assertEqual(self.client.post("/v1/reviews", json=data).json()["status"], "approved")
         delivered = self.client.post("/v1/reviews/rev-1/deliver", json={"user":"ana"})
         self.assertEqual(delivered.json(), {"action":"allow", "text":data["text"]})
+
+    def test_protected_literal_survives_missing_analysis_and_request_backdating(self):
+        import base64
+        from fastapi.testclient import TestClient
+        from isde.api import create_app
+        from isde.media import Transcript
+        from isde.model import ProtectedLiteral
+        from isde.semantic import DraftFacts
+
+        value = "dEmO.Xz_9!=p"
+
+        class Model:
+            def analyze(self, policy, text, question):
+                return DraftFacts(facts=[])
+
+            def adversarial(self, policy, text, view):
+                if value not in text:
+                    return []
+                return [Hypothesis(claim=("variable", "intrinsic_sensitivity", "credencial"),
+                                   quote=value, p_if_seen=.1)]
+
+        with mock.patch.dict(os.environ, {"MOSAIC_OPERATOR_TOKEN":"operator"}):
+            client = TestClient(create_app(db=self.path, model=Model()))
+        guard = Guard(self.path, Policy.load(ROOT/"policy.yaml"), Case.load(ROOT/"case.yaml"))
+        self.addCleanup(guard.close)
+        guard.observe([Observation(origin="protected_value", at=date(2026, 1, 5),
+                                   quote=f"La credencial interna de ALPHA es {value}.", protected_literals=[
+            ProtectedLiteral(value=value, quote=f"La credencial interna de ALPHA es {value}."),
+        ])])
+        self.assertNotIn(value, json.dumps(guard.model_context("luis", date(2026, 1, 6))))
+
+        for i, text in enumerate((value, f"ALPHA={value}", f"`{value}`", f'{{"value":"{value}"}}')):
+            with self.subTest(text=text):
+                review_id = f"literal_{i}"
+                response = client.post("/v1/reviews", json={**self.data, "review_id":review_id,
+                                                            "task":"freeform", "text":text})
+                self.assertEqual(response.json()["status"], "revise", response.text)
+                self.assertNotIn(value, response.text)
+                self.assertEqual(client.get(f"/v1/reviews/{review_id}?user=luis").status_code, 403)
+                trace = client.get(f"/v1/reviews/{review_id}?user=luis",
+                                   headers={"X-Mosaic-Operator-Token":"operator"}).json()["trace"]
+                self.assertEqual(trace["attempts"][0]["reason"], "protected_literal")
+                self.assertEqual(client.post(f"/v1/reviews/{review_id}/deliver",
+                                             json={"user":"luis"}).status_code, 400)
+        image = {"name":"foto.png", "media_type":"image/png", "data":base64.b64encode(b"\x89PNG").decode()}
+        with mock.patch("isde.media._request", return_value=Transcript(text=value)):
+            attached = client.post("/v1/reviews", json={**self.data, "review_id":"literal_attachment",
+                                                        "task":"freeform", "text":"Adjunto.",
+                                                        "attachments":[image]})
+        self.assertEqual(attached.json()["status"], "revise", attached.text)
+        self.assertEqual(client.get("/v1/inbox/luis").json()["messages"], [])
+
+        for i, text in enumerate(("Configura ALPHA.", "ALPHA=<tu_token>", "TOKEN_INTERNO=public-example",
+                                  "La credencial interna de ALPHA está en el gestor.")):
+            response = client.post("/v1/reviews", json={**self.data, "review_id":f"safe_{i}",
+                                                        "task":"freeform", "text":text})
+            self.assertEqual(response.json()["status"], "approved", response.text)
+
+    def test_source_literal_only_and_previously_approved_delivery(self):
+        from fastapi.testclient import TestClient
+        from isde.api import create_app
+        from isde.semantic import DraftFacts
+
+        value = "DuPlicAtE.v4-Q"
+
+        class Model:
+            def source(self, policy, source, grade, context):
+                return []
+
+            def analyze(self, policy, text, question):
+                return DraftFacts(facts=[])
+
+            def adversarial(self, policy, text, view):
+                return []
+
+        client = TestClient(create_app(db=self.path, model=Model()))
+        review = {**self.data, "task":"freeform", "text":value}
+        self.assertEqual(client.post("/v1/reviews", json=review).json()["status"], "approved")
+        source = {"origin":"literal_only", "at":"2026-01-05", "text":f"El secreto es {value}.",
+                  "protected_literals":[{"value":value, "quote":f"secreto es {value}"}]}
+        with_family = {**source, "protected_literals":[{**source["protected_literals"][0], "family":"offer_status"}]}
+        self.assertEqual(client.post("/v1/demo/sources/preview", json=with_family).status_code, 403)
+        self.assertEqual(client.post("/v1/sources", json={**with_family, "accept":True}).status_code, 403)
+        observation = {"origin":source["origin"], "at":source["at"], "quote":source["text"],
+                       "protected_literals":with_family["protected_literals"]}
+        self.assertEqual(client.post("/v1/observations", json={"observations":[observation]}).status_code, 403)
+        invalid = {**source, "protected_literals":[{"value":value, "quote":f"No aparece {value}"}]}
+        self.assertEqual(client.post("/v1/demo/sources/preview", json=invalid).status_code, 400)
+        preview = client.post("/v1/demo/sources/preview", json=source)
+        self.assertEqual(preview.status_code, 200, preview.text)
+        preview_id = preview.json()["preview_id"]
+        self.assertTrue(preview_id, preview.text)
+        self.assertTrue(client.post(f"/v1/demo/sources/{preview_id}/accept").json()["accepted"])
+        delivery = client.post("/v1/reviews/rev-1/deliver", json={"user":"luis"})
+        self.assertEqual(delivery.json()["action"], "review", delivery.text)
+        self.assertNotIn(value, delivery.text)
+        self.assertEqual(client.get("/v1/inbox/luis").json()["messages"], [])
 
 
     def test_hypotheses_are_scoped_and_only_delivered_for_accepted_response(self):

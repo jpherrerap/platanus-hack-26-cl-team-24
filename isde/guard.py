@@ -46,6 +46,9 @@ class Guard:
             CREATE TABLE IF NOT EXISTS source_imports (
                 org TEXT, op TEXT, source_id TEXT, digest TEXT,
                 PRIMARY KEY(org, op, source_id));
+            CREATE TABLE IF NOT EXISTS protected_literals (
+                org TEXT, op TEXT, origin TEXT, day TEXT, family TEXT, value TEXT, quote TEXT,
+                PRIMARY KEY(org, op, origin, day, family, value));
             CREATE TABLE IF NOT EXISTS dashboard_config (
                 org TEXT, op TEXT, policy TEXT, prompts TEXT, revision INTEGER,
                 PRIMARY KEY(org, op));
@@ -113,7 +116,7 @@ class Guard:
 
     def source_has_content(self, source_id):
         origin = "src:" + source_id
-        for table in ("evidence", "interpretations", "proposed_rules", "proposed_vocabulary"):
+        for table in ("evidence", "interpretations", "proposed_rules", "proposed_vocabulary", "protected_literals"):
             if self.db.execute(f"SELECT 1 FROM {table} WHERE org=? AND op=? AND origin=? LIMIT 1",
                                (*self.scope, origin)).fetchone():
                 return True
@@ -179,6 +182,12 @@ class Guard:
                                         (*self.scope, proposal.predicate, proposal.description, event.at.isoformat(),
                                          "src:" + event.origin, proposal.quote, proposal.confidence, event.assessor))
                 effective = self.policy_at(event.at)
+                for literal in event.protected_literals:
+                    if literal.family != INTRINSIC_FAMILY and literal.family not in effective.families:
+                        raise ValueError("Familia desconocida para el valor protegido")
+                    self.db.execute("INSERT OR IGNORE INTO protected_literals VALUES (?,?,?,?,?,?,?)",
+                                    (*self.scope, "src:" + event.origin, event.at.isoformat(),
+                                     literal.family, literal.value, literal.quote))
                 permitted = effective.vocabulary.keys() | effective.families.keys()
                 if any(predicate not in permitted for _, predicate, _ in event.facts):
                     raise ValueError("Predicado fuera del vocabulario")
@@ -264,6 +273,15 @@ class Guard:
 
     def path_ratings(self):
         return dict(self.db.execute("SELECT signature,confidence FROM path_ratings WHERE org=? AND op=?", self.scope))
+
+    def restricted_literals(self, user, at):
+        # A caller-supplied historical date cannot bypass current restrictions.
+        _, historical = user_grants(self.policy, role_graph(self.schema, self.case, at), user)
+        _, current = user_grants(self.policy, role_graph(self.schema, self.case, date.today()), user)
+        allowed = historical & current & self.policy.families.keys()
+        return {value for family, value in self.db.execute(
+            "SELECT DISTINCT family,value FROM protected_literals WHERE org=? AND op=?", self.scope
+        ) if family not in allowed}
 
     def secrets(self, at):
         private = internal_view(self.schema, [f for _, f, _ in self.records("", at)], self.policy_at(at))
@@ -389,6 +407,7 @@ class Guard:
         labels = self.labels()
         baseline = probabilities(risk_policy, observer_view(records, historical), secrets, ratings)
         _, allowed = user_grants(self.policy, role_graph(self.schema, self.case, at), user)
+        restricted_literals = self.restricted_literals(user, at)
         attempts = []
         options = list(task.options)
         if draft is not None:
@@ -411,6 +430,9 @@ class Guard:
                 continue
             facts = {f for clause in clauses for f in clause.facts}
             text = " ".join(c.text for c in clauses)
+            if any(value in text for value in restricted_literals):
+                attempts.append({"reason": "protected_literal"})
+                continue
             privacy_reason = rut_protection.reason(text, facts)
             if privacy_reason:
                 attempts.append({"reason": privacy_reason})

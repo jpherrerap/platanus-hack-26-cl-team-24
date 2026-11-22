@@ -1,4 +1,5 @@
 """Text analysis and recipient-specific inference for the two LangGraph workflows."""
+import hashlib
 from datetime import date
 from typing import TypedDict
 
@@ -8,7 +9,7 @@ from pydantic import Field
 from .claude import CANONICAL_IDS, Source, _request, assess_hypotheses, model_id, propose, read_path, retry_invalid
 from .graphs import describe
 from .guard import Guard
-from .model import Clause, Hypothesis, Model, Observation, Option, Task, Triple
+from .model import Clause, Hypothesis, INTRINSIC_FAMILY, Model, Observation, Option, ProtectedLiteral, Task, Triple
 from .prompts import DEFAULT_PROMPTS
 
 
@@ -59,6 +60,11 @@ class SourceInput(Model):
     at: date
     text: str = Field(min_length=1, max_length=12000)
     recipients: list[str] = Field(default_factory=list, max_length=20)
+    protected_literals: list[ProtectedLiteral] = Field(default_factory=list, max_length=64)
+
+    def digest(self):
+        excluded = set() if self.protected_literals else {"protected_literals"}
+        return hashlib.sha256(self.model_dump_json(exclude=excluded).encode()).hexdigest()
 
 
 class SourceState(TypedDict, total=False):
@@ -77,11 +83,20 @@ def source_graph(guard: Guard, model: ClaudeAnalysis):
         source = state["source"]
         proposal = Source(origin=source.origin, at=source.at, text=source.text)
         policy = guard.policy_at(source.at)
-        events = model.source(policy, proposal, None, guard.model_context(None, source.at))
+        for protected in source.protected_literals:
+            protected.validate_source(source.text)
+            if protected.family != INTRINSIC_FAMILY and protected.family not in policy.families:
+                raise ValueError("Familia protegida desconocida")
+        declared_values = {protected.value for protected in source.protected_literals}
+        events = []
         vocabulary = {}
-        for event in events:
+        for event in model.source(policy, proposal, None, guard.model_context(None, source.at)):
             if event.origin != source.origin or event.at != source.at or event.user is not None:
                 raise ValueError("La propuesta no coincide con su fuente")
+            for protected in event.protected_literals:
+                protected.validate_source(source.text)
+                if protected.family != INTRINSIC_FAMILY:
+                    raise ValueError("La extracción no puede asignar permisos a valores protegidos")
             for concept in event.vocabulary:
                 concept.validate_source(source.text)
                 concept.validate_source(event.quote)
@@ -92,6 +107,12 @@ def source_graph(guard: Guard, model: ClaudeAnalysis):
                 vocabulary[concept.predicate] = concept.description
             if event.facts and (not event.quote or not event.quote.strip() or event.quote not in source.text):
                 raise ValueError("El hecho requiere una cita literal de la fuente")
+            remaining = [literal for literal in event.protected_literals if literal.value not in declared_values]
+            if remaining or any((event.facts, event.rules, event.entities, event.vocabulary)):
+                events.append(event.model_copy(update={"protected_literals": remaining}))
+        if source.protected_literals:
+            events.append(Observation(origin=source.origin, at=source.at, quote=source.text,
+                                      protected_literals=source.protected_literals))
         policy = policy.model_copy(update={"vocabulary": {**policy.vocabulary, **vocabulary}})
         used = {fact[1] for event in events for fact in event.facts}
         used.update(atom[1] for event in events for rule in event.rules for atom in [*rule.rule.when, rule.rule.then])

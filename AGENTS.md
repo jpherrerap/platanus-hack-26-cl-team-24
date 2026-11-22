@@ -25,6 +25,7 @@ isde demo                                 # caso ficticio en memoria
 ## Invariantes
 
 - Nada llega a la bandeja sin pasar por `Guard._decide`. Si ninguna alternativa es admisible, la decisión es `review`.
+- Los valores protegidos se registran desde fuentes internas con una cita literal. `Guard._decide` bloquea su divulgación exacta sin autorización, independientemente del riesgo inferido. Solo las declaraciones explícitas de confianza pueden asignar una familia con permisos de entrega.
 - En `/v1/reviews` se evalúa el riesgo de divulgación con las hipótesis del adversario, ProbLog y la verificación de hechos protegidos. La extracción de hechos alimenta el grafo. El catálogo de alternativas de `/v1/messages` mantiene sus comprobaciones.
 - La salida de Claude es una propuesta. Cada triple exige una cita literal de la fuente y predicados y estados del vocabulario de la política.
 - El contexto de un observador nunca incluye el grafo interno, las asignaciones ni otros destinatarios (`Guard.model_context`).

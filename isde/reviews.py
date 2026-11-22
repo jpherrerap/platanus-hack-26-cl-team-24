@@ -58,6 +58,7 @@ def review(guard, model, review_id, user, task, day, text, question, *, revision
     if text is None:
         return {"review_id": review_id, "status": "rejected", "revision": 0,
                 "feedback": "Se rechazó el audio porque no se pudo transcribir. Quítalo para evaluar el resto."}
+    restricted = guard.restricted_literals(user, day)
     state = inspect_graph(guard, model).invoke({"user": user, "task": task, "question": question, "day": day, "text": text})
     status = "approved" if state["result"]["action"] == "allow" else "revise"
     snapshot = encode({"observer": state["context"], "internal": state["internal"]})
@@ -70,7 +71,7 @@ def review(guard, model, review_id, user, task, day, text, question, *, revision
         if current != expected:
             raise ValueError("La revisión cambió durante el análisis")
         actual = encode({"observer": guard.model_context(user, day), "internal": guard.model_context(None, day)})
-        if actual != snapshot:
+        if actual != snapshot or restricted != guard.restricted_literals(user, day):
             raise ValueError("El contexto cambió durante el análisis")
         number = previous[4] + 1 if revision else 0
         response = {"review_id": review_id, "status": status, "revision": number,

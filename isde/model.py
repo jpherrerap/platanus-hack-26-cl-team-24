@@ -250,6 +250,16 @@ class Entity(Model):
     aliases: list[Id] = Field(default_factory=list, max_length=16)
 
 
+class ProtectedLiteral(Model):
+    value: str = Field(min_length=1, max_length=12000)
+    quote: str = Field(min_length=1, max_length=12000)
+    family: Id = INTRINSIC_FAMILY
+
+    def validate_source(self, text: str | None):
+        if not self.value.strip() or self.value not in self.quote or not text or self.quote not in text:
+            raise ValueError("El valor protegido requiere una cita literal de la fuente")
+
+
 class Observation(Model):
     origin: Id  # Stable identity of the underlying evidence, including copies.
     facts: list[Triple] = []
@@ -257,6 +267,7 @@ class Observation(Model):
     rules: list[RuleProposal] = Field(default_factory=list, max_length=32)
     vocabulary: list[VocabularyProposal] = Field(default_factory=list, max_length=32)
     entities: list[Entity] = Field(default_factory=list, max_length=64)
+    protected_literals: list[ProtectedLiteral] = Field(default_factory=list, max_length=64)
     assessor: str = "adapter"
     at: date
     user: Id | None = None  # None is internal only.
@@ -267,8 +278,12 @@ class Observation(Model):
 
     @model_validator(mode="after")
     def audience(self):
-        if not self.facts and not self.hypotheses and not self.rules and not self.vocabulary and not self.entities:
+        if not any((self.facts, self.hypotheses, self.rules, self.vocabulary, self.entities, self.protected_literals)):
             raise ValueError("La observación está vacía")
+        if self.protected_literals and self.user is not None:
+            raise ValueError("Los valores protegidos solo se registran desde fuentes internas")
+        for literal in self.protected_literals:
+            literal.validate_source(self.quote)
         if self.entities and self.user is not None:
             raise ValueError("Las entidades y sus alias solo se registran desde fuentes internas")
         if self.vocabulary and (self.user is not None or not self.quote):
