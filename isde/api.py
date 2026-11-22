@@ -361,13 +361,13 @@ def create_app(*, db: str | None = None, rewrite=claude_rewrite, seed=True, mode
                     return {"request_id": item.request_id, "action": stored["action"], "text": stored["text"]}
                 active_rewrite = (lambda draft, safe, task: claude_rewrite(draft, safe, task, prompt=prompts["rewriter"])) if rewrite is claude_rewrite else rewrite
                 # A file cannot be rewritten, so a risky attachment goes to review instead.
+                evaluated = with_attachments(item.draft, item.attachments)
                 flow = make_workflow(guard, active_rewrite, max_rewrites=0 if item.attachments else 2).invoke({
                     "user": item.user, "task": item.task, "day": item.day, "request_id": item.request_id,
-                    "fingerprint": token, "candidate": with_attachments(item.draft, item.attachments), "rewrites": 0,
+                    "fingerprint": token, "candidate": evaluated, "rewrites": 0,
                 })
                 outcome = flow["outcome"]
-                activity_events.message_event(guard, item.request_id, item.user, item.task, outcome,
-                                              flow.get("screened", outcome))
+                activity_events.message_event(guard, item, evaluated, outcome, flow.get("screened", outcome))
                 return {"request_id": item.request_id, "action": outcome["action"], "text": outcome["text"]}
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
