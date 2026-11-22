@@ -373,7 +373,8 @@ class Guard:
     def render(self, option):
         return " ".join(self.case.clauses[key].text for key in option.clauses)
 
-    def _decide(self, user, task_id, at, draft, assessments, assessor, *, strict=False):
+    def _decide(self, user, task_id, at, draft, assessments, assessor, *, strict=False,
+                verify_all_facts=True):
         if task_id not in self.case.tasks:
             raise ValueError(f"Tarea desconocida: {task_id}")
         task = self.case.tasks[task_id]
@@ -417,7 +418,10 @@ class Guard:
             ambiguous = any(predicate in self.policy.families and
                             len(set(private.objects(E[subject], P[predicate]))) > 1
                             for subject, predicate, _ in facts)
-            unverified = ambiguous or any(rdf_fact(f) not in private for f in facts)
+            unverified = ambiguous or any(
+                rdf_fact(fact) not in private for fact in facts
+                if verify_all_facts or fact[1] in self.policy.families
+            )
             # A repeated disclosure of the same facts shares one exposure origin.
             exposed = []
             clause_origins = {}

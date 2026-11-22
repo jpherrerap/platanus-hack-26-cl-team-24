@@ -21,10 +21,14 @@ EMAIL_TASK = "email"
 FREE_TASKS = {"freeform", EMAIL_TASK}  # Reviews that answer no task of the case.
 
 
-class DraftAssessment(Model):
+class DraftFacts(Model):
     facts: list[CandidateFact] = Field(max_length=64)
-    covers_all_claims: bool
-    fulfills_task: bool
+
+
+class DraftAssessment(DraftFacts):
+    # Older reviews stored these fields alongside the extracted facts.
+    covers_all_claims: bool | None = None
+    fulfills_task: bool | None = None
     has_factual_claims: bool = True
 
 
@@ -32,13 +36,12 @@ class ClaudeAnalysis:
     def __init__(self, prompts=None):
         self.prompts = prompts if prompts is not None else dict(DEFAULT_PROMPTS)
 
-    def analyze(self, policy, text, task):
-        schema = DraftAssessment
-        context = {"text": text, "task": task, "vocabulary": policy.vocabulary,
+    def analyze(self, policy, text, _question):
+        context = {"text": text, "vocabulary": policy.vocabulary,
                    "protected_families": policy.model_dump()["families"]}
         role = (self.prompts["analyst"] + " Una familia con any_value true admite cualquier valor con identificador válido."
                 + CANONICAL_IDS)
-        return retry_invalid(lambda correction: _request(role + correction, context, schema, None, None))
+        return retry_invalid(lambda correction: _request(role + correction, context, DraftFacts, None, None))
 
     def adversarial(self, policy, text, view):
         return assess_hypotheses(policy, text, view, prompt=self.prompts["adversary"])
@@ -177,7 +180,7 @@ class ReviewState(TypedDict, total=False):
     task: str
     question: str
     day: date
-    analysis: DraftAssessment
+    analysis: DraftFacts
     hypotheses: list[Hypothesis]
     context: dict
     internal: dict
@@ -264,18 +267,8 @@ def score_candidate(guard, state):
                                             options=[Option(clauses=["mosaic_candidate"])])
     guard.case = candidate
     try:
-        result, exposure = guard._decide(state["user"], "mosaic_check", state["day"], state["text"],
-                                   {state["text"]: state["hypotheses"]}, model_id(), strict=True)
+        return guard._decide(state["user"], "mosaic_check", state["day"], state["text"],
+                                   {state["text"]: state["hypotheses"]}, model_id(), strict=True,
+                                   verify_all_facts=False)
     finally:
         guard.case = original
-    if result["action"] != "allow":
-        return result, None
-    # A human email answers no task and may say things the vocabulary cannot hold; only the inference risk
-    # (adversary hypotheses + ProbLog) and unverified protected facts decide. Agent answers stay fail-closed.
-    if state.get("task") == EMAIL_TASK:
-        return result, exposure
-    if not analysis.covers_all_claims or not analysis.fulfills_task:
-        return {"action": "review", "text": None, "attempts": [{"reason": "unverified_task_or_claims"}]}, None
-    if not analysis.facts and analysis.has_factual_claims:
-        return {"action": "review", "text": None, "attempts": [{"reason": "no_verifiable_facts"}]}, None
-    return result, exposure

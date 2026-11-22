@@ -49,7 +49,7 @@ def review(guard, model, review_id, user, task, day, text, question, *, revision
             if previous[3] != original_hash:
                 raise ValueError("Identificador usado para otra solicitud")
             return {"review_id": review_id, "status": previous[5], "revision": previous[4],
-                    "feedback": "Reformula para responder la tarea sin divulgar información restringida."
+                    "feedback": "Revisa si el borrador puede divulgar información restringida."
                                 if previous[5] == "revise" else None}
         expected = previous
 
@@ -74,7 +74,7 @@ def review(guard, model, review_id, user, task, day, text, question, *, revision
             raise ValueError("El contexto cambió durante el análisis")
         number = previous[4] + 1 if revision else 0
         response = {"review_id": review_id, "status": status, "revision": number,
-                    "feedback": "Reformula para responder la tarea sin divulgar información restringida."
+                    "feedback": "Revisa si el borrador puede divulgar información restringida."
                                 if status == "revise" else None}
         guard.db.execute("""
             INSERT INTO semantic_reviews VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)

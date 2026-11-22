@@ -1187,11 +1187,13 @@ class ClaudeTests(unittest.TestCase):
 
     def test_analyst_and_adversary_retry_once_with_correction_then_fail_closed(self):
         from isde.claude import RETRY_HINT, Interpretations
-        from isde.semantic import ClaudeAnalysis, DraftAssessment
+        from isde.semantic import ClaudeAnalysis, DraftFacts
         text = "BetaAI ya firmó lo de O-17."
-        good = DraftAssessment(facts=[], covers_all_claims=True, fulfills_task=True)
+        good = DraftFacts(facts=[])
         roles = []
         def analyst(role, context, schema, client, model):
+            self.assertNotIn("task", context)
+            self.assertEqual(set(schema.model_fields), {"facts"})
             roles.append(role)
             if len(roles) == 1:
                 raise ValueError("Claude devolvió una selección con formato inválido")
@@ -1807,16 +1809,19 @@ class SemanticApiTests(unittest.TestCase):
                      "question":"¿Cuándo vence el trámite?",
                      "text":"El plazo acaba el viernes. O-17 pertenece a BetaAI."}
 
-    def test_email_task_decides_by_inference_risk_only(self):
+    def test_review_tasks_decide_by_disclosure_risk_only(self):
         from fastapi.testclient import TestClient
         from isde.api import create_app
-        from isde.semantic import DraftAssessment
+        from isde.semantic import CandidateFact, DraftAssessment
         sane = "Asunto: Info O-17\n\nYa hablé con el jefe, no necesitamos que nos mandes nada. ¡Buen finde!"
         leak = "Asunto: Buenas noticias\n\nBetaAI ya firmó lo de O-17."
 
         class Model:
-            # Neither email maps to the vocabulary or answers a task; only the adversary tells them apart.
             def analyze(self, policy, text, question):
+                if text == "El plazo del proyecto nuevo es el viernes.":
+                    return DraftAssessment(facts=[CandidateFact(fact=("proyecto_nuevo", "deadline", "friday"),
+                                                                quote=text)],
+                                           covers_all_claims=True, fulfills_task=True)
                 return DraftAssessment(facts=[], covers_all_claims=False, fulfills_task=False)
 
             def adversarial(self, policy, text, view):
@@ -1832,9 +1837,17 @@ class SemanticApiTests(unittest.TestCase):
         delivered = client.post("/v1/reviews/m1_luis/deliver", json={"user": "luis"}).json()
         self.assertEqual(delivered["action"], "allow")
         self.assertEqual(client.get("/v1/inbox/luis").json()["messages"][-1]["text"], sane)
-        # The same text as an agent answer to a case task keeps the fail-closed gates.
         agent = client.post("/v1/reviews", json={**base, "review_id": "a1_luis", "task": "due", "text": sane})
-        self.assertEqual(agent.json()["status"], "revise")
+        self.assertEqual(agent.json()["status"], "approved", agent.text)
+        panel = client.post("/v1/reviews", json={**base, "review_id": "panel_safe", "task": "freeform", "text": sane})
+        self.assertEqual(panel.json()["status"], "approved", panel.text)
+        unsupported = client.post("/v1/reviews", json={
+            **base, "review_id": "panel_unsupported", "task": "freeform",
+            "text": "El plazo del proyecto nuevo es el viernes.",
+        })
+        self.assertEqual(unsupported.json()["status"], "approved", unsupported.text)
+        panel_leak = client.post("/v1/reviews", json={**base, "review_id": "panel_leak", "task": "freeform", "text": leak})
+        self.assertEqual(panel_leak.json()["status"], "revise", panel_leak.text)
         blocked = client.post("/v1/reviews", json={**base, "review_id": "m2_luis", "task": "email", "text": leak})
         self.assertEqual(blocked.json()["status"], "revise")
         self.assertEqual(client.post("/v1/reviews/m2_luis/deliver", json={"user": "luis"}).status_code, 400)
@@ -1931,12 +1944,12 @@ class SemanticApiTests(unittest.TestCase):
         finally:
             other.close()
 
-    def test_verification_problem_is_flagged_without_claiming_a_leak_was_blocked(self):
+    def test_incomplete_extraction_does_not_flag_a_safe_review(self):
         data = {**self.data, "user":"ana", "text":"El plazo acaba el viernes. DESCONOCIDO"}
-        self.assertEqual(self.client.post("/v1/reviews", json=data).json()["status"], "revise")
+        self.assertEqual(self.client.post("/v1/reviews", json=data).json()["status"], "approved")
         feed = self.client.get("/v1/demo/events").json()
-        self.assertEqual((feed["counts"]["blocked"],feed["counts"]["flagged"]), (0,1))
-        self.assertEqual(feed["events"][0]["kind"], "flagged")
+        self.assertEqual((feed["counts"]["blocked"],feed["counts"]["flagged"]), (0,0))
+        self.assertEqual(feed["events"][0]["kind"], "allowed")
         self.assertNotIn("filtración", feed["events"][0]["title"])
 
     def test_source_sensitivity_is_flagged_without_marking_an_outgoing_block(self):
@@ -2092,10 +2105,11 @@ class SemanticApiTests(unittest.TestCase):
         data["review_id"] = "rev-2"
         self.assertEqual(self.client.post("/v1/reviews", json=data).json()["status"], "revise")
 
-    def test_incomplete_analysis_goes_to_revision_without_leak(self):
+    def test_delivers_safe_review_with_incomplete_extraction(self):
         data = {**self.data, "user":"ana", "text":"El plazo acaba el viernes. DESCONOCIDO"}
-        self.assertEqual(self.client.post("/v1/reviews", json=data).json()["status"], "revise")
-        self.assertEqual(self.client.get("/v1/inbox/ana").json()["messages"], [])
+        self.assertEqual(self.client.post("/v1/reviews", json=data).json()["status"], "approved")
+        delivered = self.client.post("/v1/reviews/rev-1/deliver", json={"user":"ana"})
+        self.assertEqual(delivered.json(), {"action":"allow", "text":data["text"]})
 
 
     def test_hypotheses_are_scoped_and_only_delivered_for_accepted_response(self):
@@ -2132,11 +2146,6 @@ class SemanticApiTests(unittest.TestCase):
             self.assertNotIn("cliente_nube", str(guard.model_context(None, DAY)))
         finally:
             guard.close()
-
-    def test_review_rejects_unsupported_or_incomplete_extraction(self):
-        data = {**self.data, "user":"ana", "text":"El plazo acaba el viernes. DESCONOCIDO"}
-        self.assertEqual(self.client.post("/v1/reviews", json=data).json()["status"], "revise")
-        self.assertEqual(self.client.get("/v1/inbox/ana").json()["messages"], [])
 
     def test_review_and_revision_idempotency(self):
         original = self.client.post("/v1/reviews", json=self.data)
