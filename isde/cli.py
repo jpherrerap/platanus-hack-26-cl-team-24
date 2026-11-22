@@ -58,6 +58,7 @@ def story(guard, user, task, at, draft, paint, request_id=None):
     result = guard.run(user, task, at, request_id or f"demo_{user}", draft=draft)
     label, code = ACTIONS[result["action"]]
     roles = ", ".join(context["roles"]) or "sin rol"
+    case_name = guard.case.name(user)
     known = ([f"   su rol puede recibir: {', '.join(sorted(allowed))}"] if allowed else []) + (
         [f"   ya pudo saber ({pct(k['p_known'])}): {fact(k['fact'])}" for k in context["possible_knowledge"]]
         or ["   no tiene pistas previas"])
@@ -85,11 +86,11 @@ def story(guard, user, task, at, draft, paint, request_id=None):
             restricted = " restringida para su rol" if allowed else ""
             evaluation.append(f"{prefix} ninguna conclusión protegida{restricted} aumenta")
     if result["action"] == "allow":
-        return result, "\n".join(["", paint(f"{user} · {roles} → ", "1") + paint(label, f"1;{code}"),
+        return result, "\n".join(["", paint(f"{case_name} · {roles} → ", "1") + paint(label, f"1;{code}"),
                                   *known, *evaluation])
     why = {"repair": "se entrega la mejor alternativa segura",
            "review": "no hay alternativa segura; no se entrega nada"}[result["action"]]
-    lines = ["", paint(f"━━ {user} · {roles} ━━", "1"), paint("Contexto", "1"), *known,
+    lines = ["", paint(f"━━ {case_name} · {roles} ━━", "1"), paint("Contexto", "1"), *known,
              paint("Evaluación", "1"), *evaluation,
              "   decisión: " + paint(label, f"1;{code}") + f" · {why}",
              paint("Bandeja de entrada", "1") + (" (sin cambios)" if result["action"] == "review" else "")]
@@ -118,14 +119,14 @@ def demo(guard, policy, case, history, as_json):
         # The agent proposes the most useful catalog answer; mosAIc decides what is actually delivered.
         draft = guard.render(case.tasks[current].options[0])
         if not as_json:
-            print("\n" + paint(f"Turno {number} · {day.isoformat()} · tarea «{current}» · piden: {', '.join(users)}",
+            print("\n" + paint(f"Turno {number} · {day.isoformat()} · tarea «{current}» · piden: {', '.join(map(case.name, users))}",
                                "1") + f"\n{note}\n   «{draft}»")
         decisions = []
         for user in users:
             result, text = story(guard, user, current, day, draft, paint,
                                  f"demo_{user}" if number == 1 else f"demo_{user}_{number}")
             results.append({"user": user, "task": current, **result})
-            decisions.append(f"{user} " + paint(*ACTIONS[result["action"]]))
+            decisions.append(f"{case.name(user)} " + paint(*ACTIONS[result["action"]]))
             if not as_json:
                 print(text)
         summary.append(f"   turno {number} «{current}»: " + " · ".join(decisions))

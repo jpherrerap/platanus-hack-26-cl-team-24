@@ -33,8 +33,9 @@ class Guard:
         self.policy = policy
         self.case = case
         self.prompts = prompts or {}
-        if any(a.role not in policy.roles for a in case.assignments):
-            raise ValueError("Rol del directorio desconocido")
+        if unknown := sorted({a.role for a in case.assignments} - set(policy.roles)):
+            raise ValueError(f"Rol del directorio desconocido: {', '.join(unknown)}. La política solo define: "
+                             f"{', '.join(policy.roles)}. Revisa que MOSAIC_POLICY y MOSAIC_CASE sean del mismo ejemplo")
         self.schema = make_schema(policy)
         self.scope = (case.org, case.operation)
         try:
@@ -398,6 +399,16 @@ class Guard:
         """, (*self.scope, user, at.isoformat()))
         return [(origin, tuple(json.loads(fact)), min(cap, self.policy.evidence.get(grade, 1.)))
                 for origin, fact, grade, cap in rows]
+
+    def seen_quotes(self, user, at):
+        """Texts the recipient already saw as evidence (sources sent to them, released mail), oldest first."""
+        rows = self.db.execute("""
+            SELECT quote FROM (SELECT quote,day FROM evidence WHERE org=? AND op=? AND audience=? AND day<=?
+                               UNION ALL
+                               SELECT quote,day FROM interpretations WHERE org=? AND op=? AND audience=? AND day<=?)
+            WHERE quote IS NOT NULL GROUP BY quote ORDER BY min(day),quote
+        """, (*self.scope, user, at.isoformat()) * 2)
+        return [quote for (quote,) in rows]
 
     def proposed_rules(self, at):
         rows = self.db.execute("""

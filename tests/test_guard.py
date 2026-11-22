@@ -756,6 +756,13 @@ class SeededEventsTests(unittest.TestCase):
                                headers={"X-Mosaic-Operator-Token": "operator"}).json()
             self.assertEqual(event["status"], "resolved")
             self.assertTrue(event["resolution_note"])
+            guard = Guard(path, Policy.load(ROOT / "mvp-policy.yaml"), Case.load(ROOT / "vacuna-case.yaml"))
+            try:  # Luis's earlier mail is the history the secret judge combines with a new draft.
+                seen = guard.seen_quotes("luis", date(2026, 11, 22))
+                self.assertEqual([q.splitlines()[0] for q in seen], ["Asunto: Pedido a imprenta", "Asunto: Viajes de diciembre"])
+                self.assertEqual(guard.seen_quotes("ana", date(2026, 11, 22)), [])
+            finally:
+                guard.close()
         # A seeded notification is always settled: it can never pose as a pending alert.
         with self.assertRaises(Exception):
             PastEvents.model_validate({"events": [{"kind": "blocked", "title": "x", "target_type": "review",
@@ -1037,6 +1044,27 @@ class ConfidentialityTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "sin conexión"):
             review(Model(ValueError("sin conexión")))
 
+    def test_secret_judge_sees_what_the_recipient_already_received(self):
+        from isde.semantic import DraftFacts, inspect_graph
+        self.secret_graph()
+        seen = "El equipo viaja a Lima cada dos semanas."
+        self.guard.observe([Observation(origin="correo_previo", at=DAY, user="usuario_demo", grade="delivered",
+                                        facts=[("equipo", "tipo", "farmaco")], quote=seen)])
+        histories = []
+
+        class Model:
+            def analyze(self, policy, text, question):
+                return DraftFacts(facts=[])
+            def adversarial(self, policy, text, view):
+                return []
+            def secrets(self, secrets, text, history):
+                histories.append(history)
+                return []
+        for user in ("usuario_demo", "revisor_demo"):
+            state = {"user":user, "task":"email", "question":"q", "day":DAY, "text":"Hola."}
+            inspect_graph(self.guard, Model()).invoke(state)
+        self.assertEqual(histories, [[seen], []])
+
     def test_existing_database_gains_the_confidentiality_column(self):
         import sqlite3
         with tempfile.TemporaryDirectory() as folder:
@@ -1170,6 +1198,7 @@ class GenericSecretTests(unittest.TestCase):
             config = client.get("/v1/demo/config").json()
             self.assertEqual(config["families"], {})
             self.assertEqual(config["users"], ["revisor_demo", "usuario_demo"])
+            self.assertEqual(config["names"], {})
             self.assertNotIn("offer_status", str(config))
             self.assertIn("Cualquier valor", client.get("/").text)
             self.assertEqual(client.put("/v1/demo/vocabulary/actividad", json={"description":"Actividad"}).status_code, 200)
@@ -1464,6 +1493,11 @@ class GuardTests(unittest.TestCase):
 
     def decision(self, user, task="due", req=None):
         return self.g.run(user, task, DAY, req)
+
+    def test_mismatched_case_names_unknown_roles(self):
+        with self.assertRaisesRegex(ValueError, "desconocido: revisor, usuario"):
+            Guard(":memory:", self.policy, Case.load(ROOT / "vacuna-case.yaml"))
+        Guard(":memory:", Policy.load(ROOT / "mvp-policy.yaml"), Case.load(ROOT / "vacuna-case.yaml")).close()
 
     def test_two_vendors_same_role(self):
         self.assertEqual(self.decision("ana")["action"], "allow")
@@ -1921,21 +1955,21 @@ class DemoTests(unittest.TestCase):
 
     def test_demo_tells_the_story(self):
         text = self.demo()
-        luis = text[text.index("━━ luis"):text.index("sofia · ")]
+        luis = text[text.index("━━ Luis"):text.index("Sofía · ")]
         for line in ("Contexto\n   ya pudo saber (98%): o17 · signature = signed",
                      "P(betaai · offer_status = signed) 0% → 74%", "RETENIDO", "decisión: REPARAR",
                      "Bandeja de entrada\n   «El trámite vence el viernes.»\n"):
             self.assertIn(line, luis)
         # Allowed answers stay compact so the two interventions are what the audience reads.
-        self.assertIn("\nana · vendor → PERMITIR\n", text)
-        self.assertIn("sofia · legal, senior_legal → PERMITIR\n   su rol puede recibir: offer_status", text)
+        self.assertIn("\nAna · vendor → PERMITIR\n", text)
+        self.assertIn("Sofía · legal, senior_legal → PERMITIR\n   su rol puede recibir: offer_status", text)
         self.assertIn("0% → 11%", text)
-        ana = text[text.index("━━ ana"):text.index("\nluis · vendor → PERMITIR")]
+        ana = text[text.index("━━ Ana"):text.index("\nLuis · vendor → PERMITIR")]
         for line in ("ya pudo saber (75%): o17 · counterparty = betaai", "0% → 56%", "decisión: REVISIÓN HUMANA",
                      "Bandeja de entrada (sin cambios)\n   «El trámite vence el viernes. El expediente O-17 corresponde a BetaAI.»"):
             self.assertIn(line, ana)
-        self.assertIn("Resumen\n   turno 1 «due»: ana PERMITIR · luis REPARAR · sofia PERMITIR · ines PERMITIR\n"
-                      "   turno 2 «record»: ana REVISIÓN HUMANA · luis PERMITIR\n", text)
+        self.assertIn("Resumen\n   turno 1 «due»: Ana PERMITIR · Luis REPARAR · Sofía PERMITIR · Inés PERMITIR\n"
+                      "   turno 2 «record»: Ana REVISIÓN HUMANA · Luis PERMITIR\n", text)
         self.assertNotIn("\033[", text)
         # Readable on a default 80-column terminal.
         self.assertLessEqual(max(map(len, text.splitlines())), 80)
@@ -1965,7 +1999,7 @@ class CliTests(unittest.TestCase):
         self.addCleanup(os.chdir, cwd)
         code, out, _ = self.cli("demo")
         self.assertEqual(code, 0)
-        self.assertIn("ines · procurement → PERMITIR", out)
+        self.assertIn("Inés · procurement → PERMITIR", out)
 
     def test_input_errors_are_one_spanish_line(self):
         (self.dir / "bad.yaml").write_text("a: [1\n")

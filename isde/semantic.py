@@ -276,7 +276,9 @@ def inspect_graph(guard: Guard, model: ClaudeAnalysis):
         briefs = guard.secret_briefs(state["day"])
         if judge is None or not briefs:
             return {"disclosures": []}
-        history = [message["text"] for message in state["context"].get("delivered_messages", [])]
+        # A mosaic can be built from released mail and sources too, not only from guarded deliveries.
+        history = guard.seen_quotes(state["user"], state["day"])
+        history += [message["text"] for message in state["context"].get("delivered_messages", [])]
         # A judge failure propagates: the review fails closed instead of approving unchecked.
         return {"disclosures": [d.model_dump() for d in judge(briefs, state["text"], history)]}
 
