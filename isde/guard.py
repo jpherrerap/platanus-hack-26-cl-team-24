@@ -33,8 +33,9 @@ class Guard:
         self.policy = policy
         self.case = case
         self.prompts = prompts or {}
-        if any(a.role not in policy.roles for a in case.assignments):
-            raise ValueError("Rol del directorio desconocido")
+        if unknown := sorted({a.role for a in case.assignments} - set(policy.roles)):
+            raise ValueError(f"Rol del directorio desconocido: {', '.join(unknown)}. La política solo define: "
+                             f"{', '.join(policy.roles)}. Revisa que MOSAIC_POLICY y MOSAIC_CASE sean del mismo ejemplo")
         self.schema = make_schema(policy)
         self.scope = (case.org, case.operation)
         try:

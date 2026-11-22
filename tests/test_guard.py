@@ -1465,6 +1465,11 @@ class GuardTests(unittest.TestCase):
     def decision(self, user, task="due", req=None):
         return self.g.run(user, task, DAY, req)
 
+    def test_mismatched_case_names_unknown_roles(self):
+        with self.assertRaisesRegex(ValueError, "desconocido: revisor, usuario"):
+            Guard(":memory:", self.policy, Case.load(ROOT / "vacuna-case.yaml"))
+        Guard(":memory:", Policy.load(ROOT / "mvp-policy.yaml"), Case.load(ROOT / "vacuna-case.yaml")).close()
+
     def test_two_vendors_same_role(self):
         self.assertEqual(self.decision("ana")["action"], "allow")
         result = self.decision("luis")
