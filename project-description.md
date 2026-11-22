@@ -1,6 +1,6 @@
 # mosAIc
 
-mosAIc ayuda a las empresas a evitar que sus agentes de IA revelen información confidencial de forma indirecta. Antes de responder, evalúa qué podría deducir cada destinatario a partir de la respuesta, su rol y la información previa a la que pudo haber tenido acceso.
+mosAIc ayuda a las empresas a evitar que tanto sus agentes de IA como sus empleados revelen información confidencial de forma indirecta. Evalúa qué podría deducir cada destinatario a partir de un mensaje, su rol y la información previa a la que pudo haber tenido acceso.
 
 ## Cómo decide
 
