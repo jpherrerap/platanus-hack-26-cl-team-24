@@ -270,6 +270,21 @@ INTRINSIC_INSTRUCTION = (
 )
 
 
+CANONICAL_IDS = (" Usa identificadores canónicos: minúsculas, sin espacios ni guiones, como o17 para O-17 o betaai"
+                 " para BetaAI. Cada hecho es [sujeto, predicado, objeto].")
+RETRY_HINT = " Reintenta respetando exactamente el esquema, los identificadores canónicos y los predicados del vocabulario."
+
+
+def retry_invalid(call):
+    """One corrected retry when the model's output fails local validation; a second failure still fails closed."""
+    try:
+        return call("")
+    except ValueError as exc:
+        if not str(exc).startswith(("Claude devolvió", "Predicado de hipótesis", "La hipótesis requiere")):
+            raise
+        return call(RETRY_HINT)
+
+
 def assess_hypotheses(policy, text, graph_context, *, client=None, model=None, prompt=None):
     families = {**policy.model_dump()["families"], INTRINSIC_FAMILY: intrinsic_family().model_dump(mode="json")}
     context = {"familias": families, "vocabulario": policy.vocabulary,
@@ -277,11 +292,14 @@ def assess_hypotheses(policy, text, graph_context, *, client=None, model=None, p
                "reglas_logicas": [rule.model_dump() for rule in policy.rules],
                "vista": observer_context(graph_context), "texto": text, "formato_numerico": rut_format_signals(text)}
     role = OBSERVER_ROLE if prompt is None else prompt
-    role += " Una familia con any_value true admite cualquier valor con identificador válido." + INTRINSIC_INSTRUCTION
-    result = _request(role, context, Interpretations, client, model)
-    for h in result.hypotheses:
-        h.validate_source(policy, text)
-    return result.hypotheses
+    role += " Una familia con any_value true admite cualquier valor con identificador válido." + INTRINSIC_INSTRUCTION + CANONICAL_IDS
+
+    def ask(correction):
+        result = _request(role + correction, context, Interpretations, client, model)
+        for h in result.hypotheses:
+            h.validate_source(policy, text)
+        return result.hypotheses
+    return retry_invalid(ask)
 
 
 class PathReading(Model):

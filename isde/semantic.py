@@ -5,7 +5,7 @@ from typing import TypedDict
 from langgraph.graph import END, START, StateGraph
 from pydantic import Field
 
-from .claude import Source, _request, assess_hypotheses, model_id, propose, read_path
+from .claude import CANONICAL_IDS, Source, _request, assess_hypotheses, model_id, propose, read_path, retry_invalid
 from .graphs import describe
 from .guard import Guard
 from .model import Clause, Hypothesis, Model, Observation, Option, Task, Triple
@@ -36,10 +36,9 @@ class ClaudeAnalysis:
         schema = DraftAssessment
         context = {"text": text, "task": task, "vocabulary": policy.vocabulary,
                    "protected_families": policy.model_dump()["families"]}
-        return _request(
-            self.prompts["analyst"] + " Una familia con any_value true admite cualquier valor con identificador válido.",
-            context, schema, None, None,
-        )
+        role = (self.prompts["analyst"] + " Una familia con any_value true admite cualquier valor con identificador válido."
+                + CANONICAL_IDS)
+        return retry_invalid(lambda correction: _request(role + correction, context, schema, None, None))
 
     def adversarial(self, policy, text, view):
         return assess_hypotheses(policy, text, view, prompt=self.prompts["adversary"])
