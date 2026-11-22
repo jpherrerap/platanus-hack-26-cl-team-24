@@ -17,6 +17,7 @@ isde demo                                 # caso ficticio en memoria
 - `isde/graphs.py`: esquema OWL, roles vigentes por fecha, vista interna, vista del observador, búsqueda de caminos entre los extremos de un secreto (`find_paths`, `explain`) y probabilidades con ProbLog.
 - `isde/guard.py`: `Guard` con SQLite. `observe` registra evidencia, `_decide` elige la alternativa y `run` confirma la entrega en una sola transacción. `inbox` es lo único que ve el destinatario.
 - `isde/claude.py`: `interpret` y `propose`. Claude responde con una herramienta forzada y el código valida cada resultado.
+- `isde/media.py`: adjuntos de `/v1/messages` y `/v1/reviews` (el panel). Imágenes y PDF se transcriben con Claude y audio con ElevenLabs Scribe (`ELEVENLABS_API_KEY`, `ISDE_STT_MODEL`). Sin ElevenLabs, todo audio se rechaza sin error (`review` o `rejected`). Un mensaje con adjuntos nunca se reescribe: si no es admisible, va a `review`; en el panel, la reformulación se envía sin adjuntos.
 - `isde/serve.py`: demo visual local (stdlib `http.server`, solo vista previa).
 - `isde/cli.py`: CLI `isde` (`demo`, `serve`, `key`, `load`, `interpret`, `propose`, `preview`, `deliver`, `inbox`).
 - `examples/*.yaml`: política, caso, historial y fuentes de ejemplo (ficticios). Los tests los usan.
@@ -28,7 +29,7 @@ isde demo                                 # caso ficticio en memoria
 - El contexto de un observador nunca incluye el grafo interno, las asignaciones ni otros destinatarios (`Guard.model_context`).
 - Las entregas son idempotentes por `request_id` y respetan el orden del historial. Los registros de entrega no se reescriben.
 - Rol, organización, operación y origen vienen de la integración de confianza, nunca del modelo.
-- La API key se lee de `ANTHROPIC_API_KEY` o del llavero (`isde key`). Nunca va en archivos del repo.
+- La API key se lee de `ANTHROPIC_API_KEY` o del llavero (`isde key`); la de ElevenLabs, de `ELEVENLABS_API_KEY`. Nunca van en archivos del repo.
 
 ## Convenciones
 

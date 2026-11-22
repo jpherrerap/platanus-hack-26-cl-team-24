@@ -722,6 +722,41 @@ class GenericSecretTests(unittest.TestCase):
             finally:
                 guard.close()
 
+    @unittest.skipUnless(all(importlib.util.find_spec(n) for n in ("fastapi", "langgraph", "httpx")),
+                         "Instala el extra api")
+    def test_dashboard_review_evaluates_the_transcribed_attachment(self):
+        import base64
+        from fastapi.testclient import TestClient
+        from isde.api import create_app
+        from isde.media import Transcript
+        from isde.semantic import DraftAssessment
+        texts = []
+        class Model:
+            def analyze(self, policy, text, question):
+                texts.append(text)
+                return DraftAssessment(facts=[], covers_all_claims=False, fulfills_task=True)
+            def adversarial(self, policy, text, view):
+                if "Roble 10" not in text:
+                    return []
+                return [Hypothesis(claim=("persona", "intrinsic_sensitivity", "domicilio"),
+                                   quote="vive en Roble 10", p_if_seen=.9)]
+        ocr = mock.Mock(return_value=Transcript(text="La persona vive en Roble 10."))
+        image = {"name":"foto.png", "media_type":"image/png", "data":base64.b64encode(b"\x89PNG").decode()}
+        body = {"review_id":"adjunto", "user":"usuario_demo", "task":"freeform", "question":"Saluda",
+                "day":DAY.isoformat(), "text":"Hola.", "attachments":[image]}
+        with tempfile.TemporaryDirectory() as folder, mock.patch.dict(os.environ, {}, clear=True), \
+             mock.patch("isde.media._request", ocr):
+            client = TestClient(create_app(db=str(Path(folder)/"db.sqlite"), model=Model()))
+            self.assertEqual(client.post("/v1/reviews", json=body).json()["status"], "revise")
+            self.assertEqual(client.post("/v1/reviews", json=body).json()["status"], "revise")
+            other = {**body, "attachments":[{**image, "data":base64.b64encode(b"otro").decode()}]}
+            self.assertEqual(client.post("/v1/reviews", json=other).status_code, 400)
+            self.assertEqual(ocr.call_count, 1)
+            self.assertEqual(texts, ["Hola.\n\n[Adjunto: foto.png]\nLa persona vive en Roble 10."])
+            self.assertEqual(client.post("/v1/reviews/adjunto/deliver", json={"user":"usuario_demo"}).status_code, 400)
+            self.assertEqual(client.get("/v1/inbox/usuario_demo").json()["messages"], [])
+            self.assertIn('id="attachments"', client.get("/").text)
+
     def test_intrinsic_risk_is_not_ignored_when_prior_category_is_known(self):
         from isde.model import INTRINSIC_FAMILY
         policy = self.base
@@ -1417,6 +1452,62 @@ class AgentApiTests(unittest.TestCase):
         self.assertEqual(first.json()["action"], "review")
         self.assertEqual(client.post("/v1/messages", json=self.request).json(), first.json())
         self.assertEqual(client.get("/v1/inbox/luis").json()["messages"], [])
+
+    def test_risky_image_attachment_goes_to_review_without_rewrite(self):
+        import base64
+        from isde.media import Transcript
+        seen = []
+        def fake(role, context, schema, client, model, media=None):
+            seen.append(media)
+            return Transcript(text="El expediente O-17 corresponde a BetaAI.")
+        png = base64.b64encode(b"\x89PNG fake").decode()
+        item = {**self.request, "draft": "El trámite vence el viernes.",
+                "attachments": [{"name": "acta.png", "media_type": "image/png", "data": png}]}
+        with mock.patch("isde.media._request", side_effect=fake):
+            result = self.client.post("/v1/messages", json=item)
+            self.assertEqual(result.status_code, 200, result.text)
+            self.assertEqual((result.json()["action"], result.json()["text"]), ("review", None))
+            self.assertEqual(self.client.post("/v1/messages", json=item).json(), result.json())
+            other = {**item, "attachments": [{**item["attachments"][0], "data": base64.b64encode(b"otro").decode()}]}
+            self.assertEqual(self.client.post("/v1/messages", json=other).status_code, 409)
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(seen[0][0]["source"], {"type": "base64", "media_type": "image/png", "data": png})
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.client.get("/v1/inbox/luis").json()["messages"], [])
+
+    def test_audio_attachment_is_transcribed_with_elevenlabs(self):
+        from isde.media import Attachment, with_attachments
+        sent = {}
+        class Http:
+            def post(self, url, headers, data, files):
+                sent.update(url=url, headers=headers, data=data, files=files)
+                return SimpleNamespace(status_code=200, json=lambda: {"text": "La oferta está firmada."})
+        audio = Attachment(name="nota.mp3", media_type="audio/mpeg", data="SUQz")
+        with mock.patch.dict(os.environ, {"ELEVENLABS_API_KEY": "k"}):
+            text = with_attachments("Hola.", [audio], http=Http())
+        self.assertEqual(text, "Hola.\n\n[Adjunto: nota.mp3]\nLa oferta está firmada.")
+        self.assertEqual((sent["headers"], sent["data"]), ({"xi-api-key": "k"}, {"model_id": "scribe_v2"}))
+        self.assertEqual(sent["files"]["file"], ("nota.mp3", b"ID3", "audio/mpeg"))
+        with mock.patch.dict(os.environ, {}, clear=True), mock.patch("isde.media.stt_key", return_value=None):
+            self.assertIsNone(with_attachments("Hola.", [audio], http=Http()))
+        class Down:
+            def post(self, *args, **kwargs):
+                raise OSError("sin red")
+        with mock.patch.dict(os.environ, {"ELEVENLABS_API_KEY": "k"}):
+            self.assertIsNone(with_attachments("Hola.", [audio], http=Down()))
+        item = {**self.request, "draft": "Hola.", "attachments": [audio.model_dump()]}
+        with mock.patch("isde.media.stt_key", return_value=None):
+            result = self.client.post("/v1/messages", json=item)
+            self.assertEqual(result.status_code, 200, result.text)
+            self.assertEqual((result.json()["action"], result.json()["text"]), ("review", None))
+            self.assertEqual(self.client.post("/v1/messages", json=item).json(), result.json())
+        self.assertEqual(self.client.get("/v1/inbox/luis").json()["messages"], [])
+        review = {"review_id": "audio", "user": "luis", "task": "freeform", "question": "Saluda",
+                  "day": "2026-01-04", "text": "Hola.", "attachments": [audio.model_dump()]}
+        with mock.patch("isde.media.stt_key", return_value=None):
+            self.assertEqual(self.client.post("/v1/reviews", json=review).json()["status"], "rejected")
+        with self.assertRaisesRegex(ValueError, "base64"):
+            Attachment(name="x.mp3", media_type="audio/mpeg", data="no es base64!").raw()
 
     def test_invalid_recipient_and_bad_data(self):
         self.assertEqual(self.client.post("/v1/messages", json={**self.request, "user":"unknown"}).status_code, 400)
