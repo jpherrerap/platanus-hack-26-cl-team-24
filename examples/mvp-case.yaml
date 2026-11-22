@@ -1,7 +1,14 @@
+# Incluye el directorio de la intranet de AlphaCorp (ana, luis, ines, sofia): sin ellos, cada correo
+# de la intranet falla con «Destinatario fuera del directorio».
 org: organizacion_demo
 operation: operacion_demo
 assignments:
   - {user: usuario_demo, role: usuario, org: organizacion_demo, operation: operacion_demo, start: 2000-01-01}
   - {user: revisor_demo, role: revisor, org: organizacion_demo, operation: operacion_demo, start: 2000-01-01}
+  - {user: ana, role: usuario, org: organizacion_demo, operation: operacion_demo, start: 2000-01-01}
+  - {user: luis, role: usuario, org: organizacion_demo, operation: operacion_demo, start: 2000-01-01}
+  - {user: ines, role: usuario, org: organizacion_demo, operation: operacion_demo, start: 2000-01-01}
+  - {user: sofia, role: revisor, org: organizacion_demo, operation: operacion_demo, start: 2000-01-01}
+names: {ana: Ana, luis: Luis, ines: Inés, sofia: Sofía}
 clauses: {}
 tasks: {}

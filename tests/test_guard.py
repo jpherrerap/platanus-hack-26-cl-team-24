@@ -1197,8 +1197,9 @@ class GenericSecretTests(unittest.TestCase):
             client = TestClient(create_app(db=str(Path(folder)/"db.sqlite"), model=Model()))
             config = client.get("/v1/demo/config").json()
             self.assertEqual(config["families"], {})
-            self.assertEqual(config["users"], ["revisor_demo", "usuario_demo"])
-            self.assertEqual(config["names"], {})
+            # The intranet's directory is in the default case, so its mail is never rejected as unknown.
+            self.assertEqual(config["users"], ["ana", "ines", "luis", "revisor_demo", "sofia", "usuario_demo"])
+            self.assertEqual(config["names"]["ines"], "Inés")
             self.assertNotIn("offer_status", str(config))
             self.assertIn("Cualquier valor", client.get("/").text)
             self.assertEqual(client.put("/v1/demo/vocabulary/actividad", json={"description":"Actividad"}).status_code, 200)

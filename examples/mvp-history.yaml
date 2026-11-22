@@ -374,3 +374,29 @@ observations:
     - ensayos_vx_aurora
   at: '2026-11-22'
   quote: está en ensayos clínicos de fase III
+# Correos que Luis recibió antes de mosAIc (5 y 12 de noviembre en la intranet). Cada uno parece un trámite;
+# junto con el borrador «Idea para el informe anual» revelan los ensayos. Van fechados el 22, como el
+# vocabulario que usan, porque mosAIc los registra al sembrarse.
+- origin: correo_viajes_diciembre
+  user: luis
+  grade: delivered
+  facts:
+  - - visitas_de_control
+    - ubicacion
+    - chile
+  - - visitas_de_control
+    - ubicacion
+    - peru
+  at: '2026-11-22'
+  quote: "Asunto: Viajes de diciembre\n\nLuis, te paso las fechas: el equipo de Ensayos clínicos viaja a Lima y a Arica
+    cada dos semanas hasta marzo para las visitas de control. ¿Me ayudas a reservar los vuelos?"
+- origin: correo_pedido_imprenta
+  user: luis
+  grade: delivered
+  facts:
+  - - consentimiento_informado
+    - cantidad_voluntarios
+    - v_4800_voluntarios
+  at: '2026-11-22'
+  quote: "Asunto: Pedido a imprenta\n\nLuis, imprenta necesita 4.800 copias del consentimiento informado, versión Chile
+    y versión Perú. Cárgalo al centro de costo de Ensayos clínicos, no al de Comunicaciones."
